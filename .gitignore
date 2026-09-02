@@ -1,0 +1,28 @@
+# Настройки окружения и секреты (КРИТИЧЕСКИ ВАЖНО)
+.env
+.env.local
+*.env
+requirements.txt
+
+# Виртуальные окружения Python
+venv/
+.venv/
+env/
+ENV/
+build/
+dist/
+
+# Кэш Python и компиляция
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Специфичные папки IDE (VS Code, PyCharm)
+.vscode/
+.idea/
+
+# Системные файлы логов
+*.log

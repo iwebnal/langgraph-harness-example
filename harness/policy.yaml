@@ -1,0 +1,11 @@
+version: 1
+rules:
+  - id: high-risk-needs-approval
+    description: High-risk changes must not produce an execution plan unless approval is present.
+    check: state.risk_level == "high" implies state.approval == "approved"
+  - id: rollback-required
+    description: Every generated release plan must include rollback instructions.
+    check: plan contains rollback
+  - id: unknown-service-blocked
+    description: Unknown service ownership should block execution, not auto-plan.
+    check: state.service_context.owner != "unknown"

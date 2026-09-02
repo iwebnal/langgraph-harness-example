@@ -1,0 +1,4 @@
+{"request":"Deploy notifications copy update for weekly digest","expected_risk":"low","expected_route":"auto_plan"}
+{"request":"Deploy billing database migration to prod","expected_risk":"high","expected_route":"needs_human_approval"}
+{"request":"Release checkout API schema change","expected_risk":"medium","expected_route":"auto_plan"}
+{"request":"Delete stale identity database rows in prod","expected_risk":"high","expected_route":"needs_human_approval"}

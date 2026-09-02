@@ -1,0 +1,5 @@
+langgraph>=1.0.0
+langchain-core>=1.0.0
+
+[dev]
+pytest>=8.0.0
