@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 2 — Read-Only Repository Tools
+Current phase: Phase 3 — Repository Inspection Workflow
 
 Status: Completed
 
@@ -58,12 +58,21 @@ Phase 2 добавил read-only repository tools:
 - deny path traversal, paths outside the repository root, ignored directories, binary files and oversized text reads;
 - audit entries for list/read/search operations.
 
+Phase 3 добавил read-only LangGraph repository inspection workflow:
+
+- accepts an engineering task and stores the raw task in `AgentState`;
+- determines repository root from current working directory when not explicitly provided, or uses `repo_context.repo_root`;
+- inspects repository metadata through Phase 2 read-only tools;
+- selects relevant files with list/search/read operations;
+- saves `repo_context`, `review_status` and audit in `AgentState`;
+- completes with `ready_for_human_review` without applying changes.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
 - [x] Phase 1 — State redesign for coding agent
 - [x] Phase 2 — Read-only repository tools
-- [ ] Phase 3 — Repository inspection workflow
+- [x] Phase 3 — Repository inspection workflow
 - [ ] Phase 4 — LLM structured diagnosis
 - [ ] Phase 5 — ChangePlan
 - [ ] Phase 6 — Harness policy engine
@@ -98,37 +107,39 @@ Phase 2 добавил read-only repository tools:
 - Phase 2 read-only repository tools added in `src/release_triage_agent/repository.py`.
 - Repository tools enforce root boundaries, path traversal protection, ignored directories and text-only reads.
 - Added focused repository tool tests in `tests/test_repository_tools.py`.
+- Phase 3 repository inspection workflow added in `src/release_triage_agent/coding_graph.py`.
+- Added LangGraph node/routing tests in `tests/test_coding_inspection_graph.py`.
+- Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
 ```bash
 venv/bin/python -m pytest
 ```
 
-Result: 14 passed.
+Result: 20 passed.
 
 ## Current Work
 
-Phase 2 завершена. Repository tools существуют как read-only capability layer, но еще не подключены к LangGraph workflow.
+Phase 3 завершена. Repository inspection workflow подключает Phase 2 read-only tools к отдельному LangGraph graph и останавливается без изменений файлов.
 
 ## Next Actions
 
-1. Начать Phase 3: Repository inspection workflow.
-2. Добавить LangGraph nodes для repository inspection, которые используют read-only repository tools.
-3. Сохранять structured repository context и audit в `AgentState`.
-4. Добавить routing при недостатке информации.
-5. Не добавлять patching, test runner, LLM или Git/GitHub integration до соответствующих фаз.
+1. Начать Phase 4: LLM Structured Diagnosis.
+2. Добавить bounded structured diagnosis schema validation поверх `repo_context`.
+3. Добавить prompt/output contract и mocked LLM tests.
+4. Ensure invalid structured output blocks before planning.
+5. Не добавлять ChangePlan, patching, test runner, repair loop или Git/GitHub integration до соответствующих фаз.
 
 ## Known Issues
 
 - Текущий `harness/policy.yaml` является декларативным текстовым artifact, а не исполняемым policy engine.
 - `harness/eval_cases.jsonl` пока покрывает только release triage routing examples.
-- Нет LangGraph repository inspection workflow nodes.
+- Нет LLM structured output validation.
 - Нет controlled patch application.
 - Нет command allowlist runner.
-- Нет LLM structured output validation.
 - Нет durable checkpointing.
 - Нет Git/GitHub boundaries.
-- `AgentState` теперь содержит typed contracts для будущего coding-agent workflow, но LangGraph nodes для этих стадий еще не реализованы.
+- Repository inspection uses deterministic heuristic relevance selection until Phase 4 introduces structured diagnosis.
 
 ## Decisions
 
@@ -140,6 +151,7 @@ Phase 2 завершена. Repository tools существуют как read-on
 - Harness layer владеет safety boundaries; LangGraph владеет workflow; LLM владеет только bounded structured reasoning.
 - Phase 1 реализован как расширение совместимого `TypedDict` state contract без изменения текущего release triage graph behavior.
 - Phase 2 реализован как standalone read-only repository capability layer без подключения к execution, patching, test runner, LLM или Git/GitHub integration.
+- Phase 3 реализован как отдельный `coding_inspection_graph`, чтобы сохранить существующий release triage graph behavior и не смешивать его с coding-agent workflow.
 
 ## Baseline Test Command
 
