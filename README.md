@@ -1,18 +1,35 @@
 # Release Triage Agent
 
-This is an educational LangGraph agent designed to be wrapped later with harness engineering practices.
+`release-triage-agent` — учебный LangGraph-проект, который сейчас реализует release triage workflow, а дальше должен развиваться в контролируемого AI Software Engineering Agent.
 
-The agent receives a software release request, looks up service context, assesses risk, and either drafts a release plan or blocks until human approval is present.
+Текущий агент принимает release/change request, определяет тип изменения и сервис, получает service context через tool boundary, оценивает risk level детерминированной policy-логикой и либо готовит release plan, либо останавливается до human approval.
 
-## Why this example works well for learning
+Проект специально мал: его ценность в том, что он показывает базовые точки крепления для будущего harness layer — policies, evals, audit trail, sandbox, approvals и controlled execution.
 
-- It uses LangGraph's core concepts: state, nodes, edges, conditional routing, and compiled graphs.
-- It separates graph orchestration from deterministic policy logic.
-- It includes a tool boundary via `lookup_service`.
-- It creates an audit trail in state.
-- It exposes natural harness points: approval, policy checks, evals, sandboxing, and checkpointing.
+## Текущий Scope
 
-## Run
+Сейчас реализовано:
+
+- LangGraph workflow в `src/release_triage_agent/graph.py`;
+- общий `AgentState` в `src/release_triage_agent/state.py`;
+- deterministic policy functions в `src/release_triage_agent/policy.py`;
+- tool boundary `lookup_service` в `src/release_triage_agent/tools.py`;
+- базовые unit tests в `tests/test_policy.py`;
+- начальные harness artifacts в `harness/policy.yaml` и `harness/eval_cases.jsonl`;
+- demo runner `run_demo.py`.
+
+Сейчас не реализовано:
+
+- чтение реального репозитория агентом;
+- LLM structured diagnosis;
+- генерация `ChangePlan`;
+- controlled patch application;
+- automatic repair loop;
+- Git/GitHub integration;
+- sandboxed command execution;
+- production actions.
+
+## Установка и Запуск
 
 ```bash
 python -m venv .venv
@@ -22,46 +39,116 @@ python run_demo.py
 pytest
 ```
 
-## Expected behavior
+Ожидаемое поведение:
 
-Low-risk notification changes auto-produce a plan.
+- low-risk notification changes создают release plan автоматически;
+- high-risk billing/database/prod changes требуют `approval="approved"`;
+- запросы без достаточного context должны блокироваться, а не выполнять действия.
 
-High-risk billing database changes are blocked unless `approval` is set to `approved`.
+## Архитектурный Обзор
 
-## Project layout
+Текущая архитектура:
 
 ```text
-src/release_triage_agent/
-  graph.py      LangGraph workflow
-  policy.py     deterministic risk and routing policy
-  state.py      shared state schema
-  tools.py      service catalog tool
-tests/
-  test_policy.py
-harness/
-  HARNESS_ENGINEERING.md
-  eval_cases.jsonl
-  policy.yaml
+User request
+  -> LangGraph StateGraph
+  -> intake
+  -> retrieve_context via lookup_service
+  -> assess_risk via deterministic policy
+  -> conditional routing
+  -> human_approval | draft_plan | blocked_plan
+  -> final AgentState with plan and audit
 ```
 
-## How this maps to LangGraph
+Целевая архитектура для AI Software Engineering Agent:
 
-LangGraph models workflows as graphs with shared state, nodes, and edges. This example uses `StateGraph` to define the state machine and conditional edges to route high-risk changes through approval.
+```text
+Task
+  -> repository inspection
+  -> search/read tools
+  -> LLM structured diagnosis
+  -> ChangePlan
+  -> policy check
+  -> controlled unified diff patch
+  -> pytest
+  -> up to 2 repair attempts
+  -> diff review
+  -> ready_for_human_review
+```
 
-Official references:
+Harness layer должен владеть boundaries вокруг агента: filesystem access, allowed commands, patch limits, audit trail, approvals, evals, sandbox и Git/GitHub permissions. LangGraph должен владеть workflow, state transitions и routing.
 
-- https://docs.langchain.com/oss/python/langgraph/graph-api
-- https://langchain-ai.github.io/langgraph/agents/tools/
-- https://docs.langchain.com/oss/python/releases/langgraph-v1
+## MVP Vertical Slice
 
-## How this maps to harness engineering
+Первый реальный MVP coding-agent slice фиксируется так:
 
-Harness engineering should wrap this agent with controls:
+```text
+task
+  -> repository inspection
+  -> search/read
+  -> LLM structured diagnosis
+  -> ChangePlan
+  -> policy check
+  -> controlled unified diff patch
+  -> pytest
+  -> максимум 2 repair attempts
+  -> diff review
+  -> ready_for_human_review
+```
 
-- run it in a sandbox;
-- restrict available tools;
-- require approval for high-risk actions;
-- run eval cases in CI;
-- persist audit logs;
-- use durable checkpoints for long-running workflows;
-- verify generated plans before allowing real actions.
+MVP явно не включает:
+
+- automatic git push;
+- automatic merge;
+- deployment;
+- production access;
+- arbitrary shell;
+- unrestricted network.
+
+## Структура Проекта
+
+```text
+.
+├── README.md
+├── docs/
+│   ├── AI_SOFTWARE_ENGINEERING_AGENT_PLAN.md
+│   ├── ARCHITECTURE.md
+│   ├── CODING_AGENT_INSTRUCTIONS.md
+│   └── IMPLEMENTATION_STATUS.md
+├── harness/
+│   ├── HARNESS_ENGINEERING.md
+│   ├── eval_cases.jsonl
+│   └── policy.yaml
+├── src/
+│   └── release_triage_agent/
+│       ├── graph.py
+│       ├── policy.py
+│       ├── state.py
+│       └── tools.py
+├── tests/
+│   └── test_policy.py
+├── langgraph.json
+├── pyproject.toml
+└── run_demo.py
+```
+
+## Документация
+
+- `docs/AI_SOFTWARE_ENGINEERING_AGENT_PLAN.md` — нормативный roadmap развития агента. Coding agent не должен самовольно переписывать этот документ.
+- `docs/ARCHITECTURE.md` — целевая архитектура LangGraph/LLM/Harness/Execution.
+- `docs/IMPLEMENTATION_STATUS.md` — живой журнал прогресса, который обновляется после этапов.
+- `docs/CODING_AGENT_INSTRUCTIONS.md` — правила работы для Codex/coding agent.
+- `harness/HARNESS_ENGINEERING.md` — safety/control contract для harness layer.
+
+## Правило Работы Над Проектом
+
+Перед изменениями coding agent должен прочитать:
+
+1. `README.md`
+2. `docs/AI_SOFTWARE_ENGINEERING_AGENT_PLAN.md`
+3. `docs/ARCHITECTURE.md`
+4. `docs/IMPLEMENTATION_STATUS.md`
+5. `docs/CODING_AGENT_INSTRUCTIONS.md`
+6. `harness/HARNESS_ENGINEERING.md`
+
+После этого агент должен запускать baseline tests и работать только в рамках текущей фазы из `docs/IMPLEMENTATION_STATUS.md`.
