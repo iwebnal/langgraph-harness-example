@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 1 — State Redesign for Coding Agent
+Current phase: Phase 2 — Read-Only Repository Tools
 
 Status: Completed
 
@@ -50,11 +50,19 @@ Phase 1 расширил `AgentState` typed schemas для будущего MVP 
 - `review_status`;
 - structured-compatible `audit`.
 
+Phase 2 добавил read-only repository tools:
+
+- list files under a configured repository root;
+- read UTF-8 text files inside repository boundaries;
+- search text inside allowed repository files;
+- deny path traversal, paths outside the repository root, ignored directories, binary files and oversized text reads;
+- audit entries for list/read/search operations.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
 - [x] Phase 1 — State redesign for coding agent
-- [ ] Phase 2 — Read-only repository tools
+- [x] Phase 2 — Read-only repository tools
 - [ ] Phase 3 — Repository inspection workflow
 - [ ] Phase 4 — LLM structured diagnosis
 - [ ] Phase 5 — ChangePlan
@@ -87,31 +95,34 @@ Phase 1 расширил `AgentState` typed schemas для будущего MVP 
 - Phase 1 state/schema structures added in `src/release_triage_agent/state.py`.
 - Existing release triage state fields preserved for the current LangGraph workflow.
 - Added focused state schema tests in `tests/test_state.py`.
+- Phase 2 read-only repository tools added in `src/release_triage_agent/repository.py`.
+- Repository tools enforce root boundaries, path traversal protection, ignored directories and text-only reads.
+- Added focused repository tool tests in `tests/test_repository_tools.py`.
 - Baseline and final test command verified with local venv:
 
 ```bash
 venv/bin/python -m pytest
 ```
 
-Result: 7 passed.
+Result: 14 passed.
 
 ## Current Work
 
-Phase 1 завершена. Реализация execution capabilities для AI Software Engineering Agent еще не начата.
+Phase 2 завершена. Repository tools существуют как read-only capability layer, но еще не подключены к LangGraph workflow.
 
 ## Next Actions
 
-1. Начать Phase 2: Read-only repository tools.
-2. Добавить safe file listing/read/search tools с repository root boundaries.
-3. Добавить path traversal protection и focused tests на denied/allowed paths.
-4. Добавить audit entries для read-only tool calls.
+1. Начать Phase 3: Repository inspection workflow.
+2. Добавить LangGraph nodes для repository inspection, которые используют read-only repository tools.
+3. Сохранять structured repository context и audit в `AgentState`.
+4. Добавить routing при недостатке информации.
 5. Не добавлять patching, test runner, LLM или Git/GitHub integration до соответствующих фаз.
 
 ## Known Issues
 
 - Текущий `harness/policy.yaml` является декларативным текстовым artifact, а не исполняемым policy engine.
 - `harness/eval_cases.jsonl` пока покрывает только release triage routing examples.
-- Нет repository inspection tools.
+- Нет LangGraph repository inspection workflow nodes.
 - Нет controlled patch application.
 - Нет command allowlist runner.
 - Нет LLM structured output validation.
@@ -128,6 +139,7 @@ Phase 1 завершена. Реализация execution capabilities для A
 - MVP не включает automatic git push, merge, deployment, production access, arbitrary shell или unrestricted network.
 - Harness layer владеет safety boundaries; LangGraph владеет workflow; LLM владеет только bounded structured reasoning.
 - Phase 1 реализован как расширение совместимого `TypedDict` state contract без изменения текущего release triage graph behavior.
+- Phase 2 реализован как standalone read-only repository capability layer без подключения к execution, patching, test runner, LLM или Git/GitHub integration.
 
 ## Baseline Test Command
 
