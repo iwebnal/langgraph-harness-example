@@ -4,6 +4,7 @@ from pathlib import Path, PurePath
 
 from langgraph.graph import END, START, StateGraph
 
+from .diagnosis import DiagnosisLLM, DiagnosisValidationError, validate_diagnosis_output
 from .repository import ReadOnlyRepositoryTools, RepositoryAccessError
 from .state import AgentState, AuditEntry
 
@@ -168,8 +169,32 @@ def summarize_project_context(state: AgentState) -> AgentState:
     }
 
     return {
-        "workflow_stage": "ready_for_human_review",
+        "workflow_stage": "diagnosing",
         "repo_context": repo_context,
+        "review_status": {
+            "status": "not_started",
+            "diff_summary": "No changes applied. Repository inspection is ready for structured diagnosis.",
+            "changed_files": [],
+            "risks": ["No LLM diagnosis, ChangePlan, patching, test runner, Git, or deployment actions were used."],
+            "known_limitations": ["Relevant file selection is deterministic and heuristic until Phase 4."],
+        },
+        "audit": append_structured_audit(
+            state,
+            {
+                "event_type": "ready_for_human_review",
+                "actor": "agent",
+                "message": "Read-only repository inspection completed.",
+                "target": "repo_context",
+                "decision": "allowed",
+                "reason": "Controlled Phase 3 completion without applying changes.",
+            },
+        ),
+    }
+
+
+def ready_for_human_review(state: AgentState) -> AgentState:
+    return {
+        "workflow_stage": "ready_for_human_review",
         "review_status": {
             "status": "ready_for_human_review",
             "diff_summary": "No changes applied. Phase 3 performed read-only repository inspection.",
@@ -186,6 +211,37 @@ def summarize_project_context(state: AgentState) -> AgentState:
                 "target": "repo_context",
                 "decision": "allowed",
                 "reason": "Controlled Phase 3 completion without applying changes.",
+            },
+        ),
+    }
+
+
+def diagnose_task(state: AgentState, llm: DiagnosisLLM) -> AgentState:
+    try:
+        raw_output = llm.diagnose(state["task"], state["repo_context"])
+        diagnosis = validate_diagnosis_output(raw_output, state["repo_context"])
+    except (DiagnosisValidationError, KeyError, TypeError, AttributeError) as exc:
+        return _blocked_state(state, f"Invalid structured diagnosis: {exc}", event_type="llm_output_received")
+
+    return {
+        "workflow_stage": "ready_for_human_review",
+        "diagnosis": diagnosis,
+        "review_status": {
+            "status": "ready_for_human_review",
+            "diff_summary": "No changes applied. Phase 4 completed structured diagnosis only.",
+            "changed_files": [],
+            "risks": diagnosis["risks"],
+            "known_limitations": diagnosis["unknowns"],
+        },
+        "audit": append_structured_audit(
+            state,
+            {
+                "event_type": "llm_output_received",
+                "actor": "llm",
+                "message": "Structured diagnosis validated.",
+                "target": "diagnosis",
+                "decision": "allowed",
+                "reason": "Diagnosis matched required schema; no changes were applied.",
             },
         ),
     }
@@ -213,6 +269,7 @@ def build_coding_inspection_graph():
     builder.add_node("inspect_repository", inspect_repository)
     builder.add_node("select_relevant_files", select_relevant_files)
     builder.add_node("summarize_project_context", summarize_project_context)
+    builder.add_node("ready_for_human_review", ready_for_human_review)
     builder.add_node("blocked", blocked)
 
     builder.add_edge(START, "intake_task")
@@ -233,20 +290,60 @@ def build_coding_inspection_graph():
             "blocked": "blocked",
         },
     )
-    builder.add_edge("summarize_project_context", END)
+    builder.add_edge("summarize_project_context", "ready_for_human_review")
+    builder.add_edge("ready_for_human_review", END)
     builder.add_edge("blocked", END)
 
     return builder.compile()
 
 
-def _blocked_state(state: AgentState, reason: str, tool_audit: list[dict] | None = None) -> AgentState:
+def build_coding_diagnosis_graph(llm: DiagnosisLLM):
+    builder = StateGraph(AgentState)
+    builder.add_node("intake_task", intake_task)
+    builder.add_node("inspect_repository", inspect_repository)
+    builder.add_node("select_relevant_files", select_relevant_files)
+    builder.add_node("summarize_project_context", summarize_project_context)
+    builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
+    builder.add_node("blocked", blocked)
+
+    builder.add_edge(START, "intake_task")
+    builder.add_edge("intake_task", "inspect_repository")
+    builder.add_conditional_edges(
+        "inspect_repository",
+        inspection_route,
+        {
+            "select_relevant_files": "select_relevant_files",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "select_relevant_files",
+        select_route,
+        {
+            "summarize_project_context": "summarize_project_context",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_edge("summarize_project_context", "diagnose_task")
+    builder.add_edge("diagnose_task", END)
+    builder.add_edge("blocked", END)
+
+    return builder.compile()
+
+
+def _blocked_state(
+    state: AgentState,
+    reason: str,
+    tool_audit: list[dict] | None = None,
+    event_type: str = "run_blocked",
+) -> AgentState:
     audit = extend_audit(state, tool_audit or [])
     audit.append(
         {
-            "event_type": "run_blocked",
+            "event_type": event_type,
             "actor": "harness",
-            "message": "Repository inspection blocked.",
-            "target": "repo_context",
+            "message": "Coding workflow blocked.",
+            "target": "diagnosis" if event_type == "llm_output_received" else "repo_context",
             "decision": "denied",
             "reason": reason,
         }
