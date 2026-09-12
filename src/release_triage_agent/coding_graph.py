@@ -4,6 +4,12 @@ from pathlib import Path, PurePath
 
 from langgraph.graph import END, START, StateGraph
 
+from .change_plan import (
+    ChangePlanner,
+    ChangePlanValidationError,
+    precheck_change_plan_policy,
+    validate_change_plan_output,
+)
 from .diagnosis import DiagnosisLLM, DiagnosisValidationError, validate_diagnosis_output
 from .repository import ReadOnlyRepositoryTools, RepositoryAccessError
 from .state import AgentState, AuditEntry
@@ -247,6 +253,86 @@ def diagnose_task(state: AgentState, llm: DiagnosisLLM) -> AgentState:
     }
 
 
+def propose_change_plan(state: AgentState, planner: ChangePlanner) -> AgentState:
+    if "diagnosis" not in state:
+        return _blocked_state(
+            state,
+            "ChangePlan requires valid structured diagnosis.",
+            event_type="change_plan_created",
+            target="change_plan",
+        )
+
+    try:
+        raw_output = planner.propose_change_plan(state["task"], state["repo_context"], state["diagnosis"])
+        change_plan = validate_change_plan_output(raw_output, state["repo_context"], state["diagnosis"])
+    except (ChangePlanValidationError, KeyError, TypeError, AttributeError) as exc:
+        return _blocked_state(
+            state,
+            f"Invalid ChangePlan: {exc}",
+            event_type="change_plan_created",
+            target="change_plan",
+        )
+
+    policy_result = precheck_change_plan_policy(change_plan)
+    audit = append_structured_audit(
+        state,
+        {
+            "event_type": "change_plan_created",
+            "actor": "llm",
+            "message": "Structured ChangePlan validated.",
+            "target": "change_plan",
+            "decision": "allowed",
+            "reason": "ChangePlan matched required schema; no patches were generated or applied.",
+        },
+    )
+    audit.append(
+        {
+            "event_type": "policy_checked",
+            "actor": "harness",
+            "message": "ChangePlan policy pre-check completed.",
+            "target": "change_plan",
+            "decision": "allowed" if policy_result["allowed"] else "denied",
+            "reason": "Phase 5 policy pre-check contract; no full policy engine or patching.",
+        }
+    )
+
+    if not policy_result["allowed"]:
+        audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "ChangePlan blocked by policy pre-check.",
+                "target": "change_plan",
+                "decision": "denied",
+                "reason": "ChangePlan policy pre-check failed.",
+            }
+        )
+        return {
+            "workflow_stage": "blocked",
+            "change_plan": change_plan,
+            "policy_result": policy_result,
+            "review_status": {
+                "status": "blocked",
+                "known_limitations": ["ChangePlan policy pre-check failed."],
+            },
+            "audit": audit,
+        }
+
+    return {
+        "workflow_stage": "ready_for_human_review",
+        "change_plan": change_plan,
+        "policy_result": policy_result,
+        "review_status": {
+            "status": "ready_for_human_review",
+            "diff_summary": "No changes applied. Phase 5 completed ChangePlan validation and policy pre-check only.",
+            "changed_files": [],
+            "risks": change_plan["policy_risks"],
+            "known_limitations": ["Patch generation and full policy engine are not implemented until later phases."],
+        },
+        "audit": audit,
+    }
+
+
 def inspection_route(state: AgentState) -> str:
     if state.get("workflow_stage") == "blocked":
         return "blocked"
@@ -331,11 +417,55 @@ def build_coding_diagnosis_graph(llm: DiagnosisLLM):
     return builder.compile()
 
 
+def build_coding_change_plan_graph(llm: DiagnosisLLM, planner: ChangePlanner):
+    builder = StateGraph(AgentState)
+    builder.add_node("intake_task", intake_task)
+    builder.add_node("inspect_repository", inspect_repository)
+    builder.add_node("select_relevant_files", select_relevant_files)
+    builder.add_node("summarize_project_context", summarize_project_context)
+    builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
+    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner))
+    builder.add_node("blocked", blocked)
+
+    builder.add_edge(START, "intake_task")
+    builder.add_edge("intake_task", "inspect_repository")
+    builder.add_conditional_edges(
+        "inspect_repository",
+        inspection_route,
+        {
+            "select_relevant_files": "select_relevant_files",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "select_relevant_files",
+        select_route,
+        {
+            "summarize_project_context": "summarize_project_context",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_edge("summarize_project_context", "diagnose_task")
+    builder.add_conditional_edges(
+        "diagnose_task",
+        diagnosis_route,
+        {
+            "propose_change_plan": "propose_change_plan",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_edge("propose_change_plan", END)
+    builder.add_edge("blocked", END)
+
+    return builder.compile()
+
+
 def _blocked_state(
     state: AgentState,
     reason: str,
     tool_audit: list[dict] | None = None,
     event_type: str = "run_blocked",
+    target: str | None = None,
 ) -> AgentState:
     audit = extend_audit(state, tool_audit or [])
     audit.append(
@@ -343,7 +473,7 @@ def _blocked_state(
             "event_type": event_type,
             "actor": "harness",
             "message": "Coding workflow blocked.",
-            "target": "diagnosis" if event_type == "llm_output_received" else "repo_context",
+            "target": target or ("diagnosis" if event_type == "llm_output_received" else "repo_context"),
             "decision": "denied",
             "reason": reason,
         }
@@ -356,6 +486,12 @@ def _blocked_state(
         },
         "audit": audit,
     }
+
+
+def diagnosis_route(state: AgentState) -> str:
+    if state.get("workflow_stage") == "blocked":
+        return "blocked"
+    return "propose_change_plan"
 
 
 def _discover_baseline_tests(files: list[str]) -> list[str]:

@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 4 — LLM Structured Diagnosis
+Current phase: Phase 5 — ChangePlan
 
 Status: Completed
 
@@ -75,6 +75,15 @@ Phase 4 добавил bounded structured diagnosis:
 - saves `diagnosis`, including assumptions and unknowns, plus LLM audit in `AgentState`;
 - blocks invalid or incomplete LLM output before any planning step.
 
+Phase 5 добавил bounded ChangePlan:
+
+- defines a narrow `ChangePlanner` protocol and deterministic ChangePlan validation;
+- validates required plan fields before storing output in `AgentState`;
+- connects `propose_change_plan` after valid structured diagnosis in a separate graph builder;
+- adds a Phase 5 policy pre-check contract for planned changed files and protected paths;
+- saves `change_plan`, `policy_result` and audit in `AgentState`;
+- blocks invalid ChangePlan or failed pre-check before any patch generation.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -82,7 +91,7 @@ Phase 4 добавил bounded structured diagnosis:
 - [x] Phase 2 — Read-only repository tools
 - [x] Phase 3 — Repository inspection workflow
 - [x] Phase 4 — LLM structured diagnosis
-- [ ] Phase 5 — ChangePlan
+- [x] Phase 5 — ChangePlan
 - [ ] Phase 6 — Harness policy engine
 - [ ] Phase 7 — Controlled unified diff patch
 - [ ] Phase 8 — Test execution
@@ -120,6 +129,9 @@ Phase 4 добавил bounded structured diagnosis:
 - Phase 4 structured diagnosis validation added in `src/release_triage_agent/diagnosis.py`.
 - Added diagnosis graph support in `src/release_triage_agent/coding_graph.py`.
 - Added mocked LLM tests in `tests/test_coding_diagnosis_graph.py` and schema validation tests in `tests/test_diagnosis.py`.
+- Phase 5 ChangePlan validation and policy pre-check contract added in `src/release_triage_agent/change_plan.py`.
+- Added ChangePlan graph support in `src/release_triage_agent/coding_graph.py`.
+- Added fake planner tests in `tests/test_coding_change_plan_graph.py` and deterministic validation/pre-check tests in `tests/test_change_plan.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -127,18 +139,18 @@ Phase 4 добавил bounded structured diagnosis:
 venv/bin/python -m pytest
 ```
 
-Result: 29 passed.
+Result: 41 passed.
 
 ## Current Work
 
-Phase 4 завершена. Structured diagnosis подключен поверх repository inspection workflow, валидируется до planning и не применяет изменений.
+Phase 5 завершена. ChangePlan создается только после valid diagnosis, валидируется детерминированно, проходит policy pre-check contract и не генерирует patch.
 
 ## Next Actions
 
-1. Начать Phase 5: ChangePlan.
-2. Добавить schema and deterministic validation for `ChangePlan`.
-3. Generate or accept a plan only after valid `diagnosis`.
-4. Add policy pre-check placeholder/contract without applying patches.
+1. Начать Phase 6: Harness Policy Engine.
+2. Превратить policy checks из Phase 5 contract/stub в отдельный harness policy component.
+3. Add structured policy violation output and tests for pass/fail.
+4. Keep policy failure blocking execution before patch generation.
 5. Не добавлять patching, test runner, repair loop или Git/GitHub integration до соответствующих фаз.
 
 ## Known Issues
@@ -150,8 +162,9 @@ Phase 4 завершена. Structured diagnosis подключен поверх
 - Нет durable checkpointing.
 - Нет Git/GitHub boundaries.
 - Structured diagnosis currently depends on deterministic heuristic relevant-file selection from Phase 3.
-- Нет ChangePlan generation/validation.
 - Phase 4 uses fake/mocked LLMs in tests; no real LLM API integration is configured.
+- Phase 5 policy pre-check is a limited contract/stub, not the full Phase 6 harness policy engine.
+- Phase 5 uses fake/mocked planners in tests; no real planner/LLM API integration is configured.
 
 ## Decisions
 
@@ -165,6 +178,7 @@ Phase 4 завершена. Structured diagnosis подключен поверх
 - Phase 2 реализован как standalone read-only repository capability layer без подключения к execution, patching, test runner, LLM или Git/GitHub integration.
 - Phase 3 реализован как отдельный `coding_inspection_graph`, чтобы сохранить существующий release triage graph behavior и не смешивать его с coding-agent workflow.
 - Phase 4 реализован через narrow LLM protocol and validation layer; LLM receives only `task` and `repo_context`, and has no direct filesystem, shell, network or Git access.
+- Phase 5 реализован через narrow planner protocol and deterministic validation; planner receives only `task`, `repo_context` and validated `diagnosis`, and no patch generation/application is available.
 
 ## Baseline Test Command
 
