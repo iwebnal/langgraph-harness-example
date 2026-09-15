@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 10 — Diff review state
+Current phase: Phase 11 — MVP evals
 
 Status: Completed
 
@@ -139,6 +139,17 @@ Phase 10 добавил deterministic final diff review state:
 - records `diff_review` and `ready_for_human_review` audit events;
 - performs no patch application, extra commands, Git/GitHub, sandbox, deployment or production actions.
 
+Phase 11 добавил local deterministic MVP evals:
+
+- expands `harness/eval_cases.jsonl` with explicit release triage and coding MVP eval cases;
+- preserves/migrates legacy release triage eval shape through loader compatibility;
+- adds a local eval runner in `src/release_triage_agent/evals.py`;
+- returns structured eval results with case name, pass/fail, failures, observed status and checked expectations;
+- uses fake bounded LLM/planner/patch/repair/test components for coding MVP evals;
+- covers safe task, blocked invalid task, protected file modification, failing tests and repair-limit behavior;
+- verifies expectations for final status, changed files, protected files, test statuses, max changed files, max repair attempts and required audit events;
+- performs no network access, no real LLM/API calls, no arbitrary shell, no checkpointing, Git/GitHub, sandbox or deployment actions.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -152,7 +163,7 @@ Phase 10 добавил deterministic final diff review state:
 - [x] Phase 8 — Test execution
 - [x] Phase 9 — Repair loop
 - [x] Phase 10 — Diff review state
-- [ ] Phase 11 — MVP evals
+- [x] Phase 11 — MVP evals
 - [ ] Phase 12 — Checkpointing and durable audit
 - [ ] Phase 13 — Human-in-the-loop
 - [ ] Phase 14 — Git boundaries
@@ -209,6 +220,9 @@ Phase 10 добавил deterministic final diff review state:
 - Phase 10 final diff review aggregation added in `src/release_triage_agent/coding_graph.py`.
 - Extended `ReviewSummary` state metadata in `src/release_triage_agent/state.py`.
 - Added focused diff review tests in `tests/test_diff_review.py`.
+- Phase 11 local eval runner added in `src/release_triage_agent/evals.py`.
+- `harness/eval_cases.jsonl` migrated to explicit eval cases while preserving release triage scenarios.
+- Added focused eval runner tests in `tests/test_evals.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -232,21 +246,25 @@ Baseline result before Phase 10: 79 passed.
 
 Final result after Phase 10: 87 passed.
 
+Baseline result before Phase 11: 87 passed.
+
+Final result after Phase 11: 97 passed.
+
 ## Current Work
 
-Phase 10 завершена. Final diff review is deterministic aggregation over task, diagnosis, ChangePlan, patch metadata, tests and repair attempts; successful and failed-after-repair-limit workflows end in `ready_for_human_review` with explicit final status and limitations.
+Phase 11 завершена. MVP eval cases are local JSONL records and the deterministic eval runner checks release triage plus coding MVP behavior with fake bounded components and structured expectation failures.
 
 ## Next Actions
 
-1. Начать Phase 11: MVP evals.
-2. Expand `harness/eval_cases.jsonl` with safe task, blocked task, protected file, failing tests and repair limit cases.
-3. Add a deterministic local eval runner or tests that verify expected safe/blocked routes.
-4. Document expected eval outputs and failure signals.
-5. Не добавлять checkpointing, Git/GitHub integration, sandbox или deployment до соответствующих фаз.
+1. Начать Phase 12: Checkpointing and durable audit.
+2. Add run IDs and state snapshot/audit persistence boundaries.
+3. Define retention/redaction behavior for durable audit.
+4. Ensure interrupted runs can resume safely without silently overwriting audit.
+5. Не добавлять Git/GitHub integration, sandbox или deployment до соответствующих фаз.
 
 ## Known Issues
 
-- `harness/eval_cases.jsonl` пока покрывает только release triage routing examples.
+- MVP eval cases now cover release triage and coding workflow behavior, but there is no standalone CLI wrapper yet.
 - Patch validation exists, but no controlled patch application step has been enabled yet.
 - Command allowlist runner exists only for `pytest` and `python -m pytest`; no lint/typecheck/package commands are allowed yet.
 - Нет durable checkpointing.
@@ -258,6 +276,7 @@ Phase 10 завершена. Final diff review is deterministic aggregation over
 - Phase 8 runs tests against the current working tree after patch validation; a controlled apply step is still not enabled in this architecture.
 - Repair loop exists, but because controlled patch application is not enabled yet, tests still run against the current working tree rather than applied candidate diffs.
 - Final diff review is deterministic and state-based; richer human review formatting can be improved later without changing enforcement boundaries.
+- No durable eval result storage exists yet; eval results are returned in memory until Phase 12 introduces durable audit/checkpointing.
 
 ## Decisions
 
@@ -281,6 +300,8 @@ Phase 10 завершена. Final diff review is deterministic aggregation over
 - Repair attempts update top-level `change_plan`, `policy_result`, `patch_policy_result`, `patch` and append `test_results`, while preserving each attempt snapshot under `repair_attempts`.
 - Phase 10 keeps final review deterministic and state-based; no LLM is used to decide final status.
 - `diff_review` appends review audit events and does not mutate patch, run commands or perform repository writes.
+- Phase 11 eval runner is local-only and deterministic; coding MVP evals use fake bounded components and the same graph/policy/patch/test validation paths.
+- Legacy release triage eval records with `expected_risk` and `expected_route` remain readable through loader migration.
 
 ## Baseline Test Command
 
