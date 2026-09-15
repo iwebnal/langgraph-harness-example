@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 6 — Harness policy engine
+Current phase: Phase 7 — Controlled unified diff patch
 
 Status: Completed
 
@@ -93,6 +93,16 @@ Phase 6 добавил deterministic Harness Policy Engine:
 - connects policy result to the ChangePlan LangGraph workflow after valid diagnosis and valid ChangePlan;
 - blocks execution path before patch generation when policy denies the plan.
 
+Phase 7 добавил controlled unified diff patch generation and validation:
+
+- defines a narrow `PatchGenerator` protocol for candidate unified diff output;
+- validates unified diff headers, file sections and hunk content deterministically;
+- rejects path traversal, absolute paths, URI paths, undeclared targets and binary patches;
+- checks patch target files and patch limits against the Phase 6 Harness Policy Engine;
+- records patch metadata, patch policy result and patch audit in `AgentState`;
+- blocks malformed or unsafe candidate patches before apply/review;
+- stops at `ready_for_human_review` with a validated patch and does not run tests, repair, Git/GitHub, sandbox or deployment actions.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -102,7 +112,7 @@ Phase 6 добавил deterministic Harness Policy Engine:
 - [x] Phase 4 — LLM structured diagnosis
 - [x] Phase 5 — ChangePlan
 - [x] Phase 6 — Harness policy engine
-- [ ] Phase 7 — Controlled unified diff patch
+- [x] Phase 7 — Controlled unified diff patch
 - [ ] Phase 8 — Test execution
 - [ ] Phase 9 — Repair loop
 - [ ] Phase 10 — Diff review state
@@ -145,6 +155,12 @@ Phase 6 добавил deterministic Harness Policy Engine:
 - `harness/policy.yaml` extended with structured `harness_policy` config for path boundaries, protected files, change limits and approval markers.
 - ChangePlan workflow now calls the harness policy engine with repository-local policy config.
 - Added policy engine pass/fail tests in `tests/test_harness_policy.py`.
+- Phase 7 controlled unified diff support added in `src/release_triage_agent/patch.py`.
+- Added patch-stage policy checks for actual diff targets, changed lines and patch size in `src/release_triage_agent/harness_policy.py`.
+- Added patch workflow support in `src/release_triage_agent/coding_graph.py`.
+- Extended `AgentState` with `patch_policy_result` and patch `size_bytes` metadata.
+- Added focused patch validation tests in `tests/test_patch.py`.
+- Added fake generator graph tests in `tests/test_coding_patch_graph.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -152,24 +168,26 @@ Phase 6 добавил deterministic Harness Policy Engine:
 venv/bin/python -m pytest
 ```
 
-Result: 49 passed.
+Baseline result before Phase 7: 49 passed.
+
+Final result after Phase 7: 60 passed.
 
 ## Current Work
 
-Phase 6 завершена. ChangePlan создается только после valid diagnosis, валидируется детерминированно, затем проверяется отдельным harness policy engine и не генерирует patch.
+Phase 7 завершена. Candidate patch генерируется только после valid structured diagnosis, valid ChangePlan и allowed plan-stage `PolicyResult`; затем unified diff валидируется детерминированно, повторно проверяется patch-stage policy engine и сохраняется для human review без применения к файловой системе.
 
 ## Next Actions
 
-1. Начать Phase 7: Controlled unified diff patch.
-2. Добавить patch generation как отдельный bounded step after policy-allowed ChangePlan.
-3. Validate target files against Phase 6 harness policy before any patch application.
-4. Keep patch application controlled and atomic; do not add arbitrary shell.
-5. Не добавлять test runner, repair loop, Git/GitHub integration, sandbox или deployment до соответствующих фаз.
+1. Начать Phase 8: Test execution.
+2. Добавить command whitelist runner for `pytest` / `python -m pytest`.
+3. Enforce structured argv matching, repo-root working directory, timeout, output capture and exit code capture.
+4. Save command audit and `test_results` in `AgentState`.
+5. Не добавлять repair loop, Git/GitHub integration, sandbox или deployment до соответствующих фаз.
 
 ## Known Issues
 
 - `harness/eval_cases.jsonl` пока покрывает только release triage routing examples.
-- Нет controlled patch application.
+- Patch validation exists, but no controlled patch application step has been enabled yet.
 - Нет command allowlist runner.
 - Нет durable checkpointing.
 - Нет Git/GitHub boundaries.
@@ -177,6 +195,7 @@ Phase 6 завершена. ChangePlan создается только посл�
 - Phase 4 uses fake/mocked LLMs in tests; no real LLM API integration is configured.
 - Phase 5 uses fake/mocked planners in tests; no real planner/LLM API integration is configured.
 - Phase 6 policy parser intentionally supports only the minimal YAML subset used by `harness/policy.yaml`; replacing it with a full YAML dependency is a later decision.
+- Phase 7 does not execute tests; validated patches stop at human review until Phase 8 introduces an allowlisted command runner.
 
 ## Decisions
 
@@ -192,6 +211,8 @@ Phase 6 завершена. ChangePlan создается только посл�
 - Phase 4 реализован через narrow LLM protocol and validation layer; LLM receives only `task` and `repo_context`, and has no direct filesystem, shell, network or Git access.
 - Phase 5 реализован через narrow planner protocol and deterministic validation; planner receives only `task`, `repo_context` and validated `diagnosis`, and no patch generation/application is available.
 - Phase 6 реализован как deterministic Python policy engine; policy denial blocks before patch generation and missing/invalid policy config fails closed.
+- Phase 7 реализован как validation-first controlled unified diff stage; current architecture does not need an apply step yet, so no filesystem writes are performed by the patch workflow.
+- Patch policy result is stored separately as `patch_policy_result`, preserving the plan-stage `policy_result` for audit/debugging.
 
 ## Baseline Test Command
 

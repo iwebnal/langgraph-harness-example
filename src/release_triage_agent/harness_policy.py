@@ -78,6 +78,7 @@ def check_change_plan_policy(
             ],
             warnings=[],
             checked_rules=["policy-config-load"],
+            stage="plan",
         )
 
     violations: list[PolicyViolation] = []
@@ -117,7 +118,84 @@ def check_change_plan_policy(
         violations=violations,
         warnings=warnings,
         requires_approval=requires_approval,
+        stage="plan",
         checked_rules=checked_rules,
+    )
+
+
+def check_patch_policy(
+    target_files: list[str],
+    *,
+    changed_lines: int,
+    patch_size_bytes: int,
+    config: HarnessPolicyConfig | None = None,
+    policy_path: str | Path | None = None,
+) -> PolicyResult:
+    try:
+        effective_config = config or load_policy_config(policy_path or DEFAULT_POLICY_PATH)
+    except PolicyConfigError as exc:
+        return _result(
+            allowed=False,
+            violations=[
+                _violation(
+                    "policy-config-invalid",
+                    f"Harness policy config is invalid or unavailable: {exc}",
+                )
+            ],
+            warnings=[],
+            checked_rules=["policy-config-load"],
+            stage="patch",
+        )
+
+    plan_like: ChangePlan = {
+        "summary": "Patch target policy check.",
+        "files_to_read": [],
+        "files_to_change": target_files,
+        "expected_behavior": "Patch targets are policy allowed.",
+        "policy_risks": [],
+        "tests_to_run": ["pytest"],
+        "rollback_notes": "Reject candidate patch before application.",
+    }
+    violations = _check_files_to_change(plan_like, effective_config)
+    checked_rules = [
+        "path-boundaries",
+        "allowed-change-prefixes",
+        "denied-change-prefixes",
+        "protected-files",
+        "max-changed-files",
+        "max-patch-lines",
+        "max-patch-size-bytes",
+    ]
+
+    if len(target_files) > effective_config.max_changed_files:
+        violations.append(
+            _violation(
+                "max-changed-files",
+                f"Patch targets {len(target_files)} files; max is {effective_config.max_changed_files}.",
+            )
+        )
+    if changed_lines > effective_config.max_patch_lines:
+        violations.append(
+            _violation(
+                "max-patch-lines",
+                f"Patch changes {changed_lines} lines; max is {effective_config.max_patch_lines}.",
+            )
+        )
+    if patch_size_bytes > effective_config.max_patch_size_bytes:
+        violations.append(
+            _violation(
+                "max-patch-size-bytes",
+                f"Patch is {patch_size_bytes} bytes; max is {effective_config.max_patch_size_bytes}.",
+            )
+        )
+
+    return _result(
+        allowed=not violations,
+        violations=violations,
+        warnings=[],
+        requires_approval=False,
+        checked_rules=checked_rules,
+        stage="patch",
     )
 
 
@@ -179,11 +257,12 @@ def _result(
     violations: list[PolicyViolation],
     warnings: list[str],
     checked_rules: list[str],
+    stage: str,
     requires_approval: bool = False,
 ) -> PolicyResult:
     return {
         "allowed": allowed,
-        "stage": "plan",
+        "stage": stage,
         "violations": violations,
         "warnings": warnings,
         "requires_approval": requires_approval,

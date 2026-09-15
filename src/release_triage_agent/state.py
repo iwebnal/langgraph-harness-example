@@ -95,6 +95,7 @@ class Patch(TypedDict):
     unified_diff: str
     target_files: list[str]
     changed_lines: NotRequired[int]
+    size_bytes: NotRequired[int]
     summary: NotRequired[str]
 
 
@@ -156,6 +157,7 @@ class AgentState(TypedDict):
     diagnosis: NotRequired[Diagnosis]
     change_plan: NotRequired[ChangePlan]
     policy_result: NotRequired[PolicyResult]
+    patch_policy_result: NotRequired[PolicyResult]
     patch: NotRequired[Patch]
     test_results: NotRequired[list[TestResult]]
     repair_attempts: NotRequired[list[RepairAttempt]]

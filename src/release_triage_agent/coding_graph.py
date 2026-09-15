@@ -11,6 +11,12 @@ from .change_plan import (
 )
 from .diagnosis import DiagnosisLLM, DiagnosisValidationError, validate_diagnosis_output
 from .harness_policy import check_change_plan_policy
+from .patch import (
+    PatchGenerator,
+    PatchPolicyError,
+    PatchValidationError,
+    validate_candidate_patch,
+)
 from .repository import ReadOnlyRepositoryTools, RepositoryAccessError
 from .state import AgentState, AuditEntry
 
@@ -340,6 +346,160 @@ def propose_change_plan(state: AgentState, planner: ChangePlanner) -> AgentState
     }
 
 
+def generate_patch(state: AgentState, patch_generator: PatchGenerator) -> AgentState:
+    if "diagnosis" not in state:
+        return _blocked_state(
+            state,
+            "Patch generation requires valid structured diagnosis.",
+            event_type="patch_generated",
+            target="patch",
+        )
+    if "change_plan" not in state:
+        return _blocked_state(
+            state,
+            "Patch generation requires valid ChangePlan.",
+            event_type="patch_generated",
+            target="patch",
+        )
+
+    plan_policy_result = state.get("policy_result")
+    if not plan_policy_result or plan_policy_result.get("stage") != "plan" or not plan_policy_result.get("allowed"):
+        return _blocked_state(
+            state,
+            "Patch generation requires allowed ChangePlan policy result.",
+            event_type="patch_generated",
+            target="patch",
+        )
+
+    try:
+        raw_output = patch_generator.generate_patch(
+            state["task"],
+            state["repo_context"],
+            state["diagnosis"],
+            state["change_plan"],
+        )
+    except (KeyError, TypeError, AttributeError) as exc:
+        return _blocked_state(
+            state,
+            f"Patch generator failed: {exc}",
+            event_type="patch_generated",
+            target="patch",
+        )
+
+    audit = append_structured_audit(
+        state,
+        {
+            "event_type": "patch_generated",
+            "actor": "llm",
+            "message": "Candidate unified diff generated.",
+            "target": "patch",
+            "decision": "allowed",
+            "reason": "Patch generator returned a candidate for deterministic validation.",
+        },
+    )
+
+    try:
+        patch, patch_policy_result = validate_candidate_patch(
+            raw_output,
+            repo_context=state["repo_context"],
+            change_plan=state["change_plan"],
+        )
+    except PatchPolicyError as exc:
+        audit.append(
+            {
+                "event_type": "policy_checked",
+                "actor": "harness",
+                "message": "Patch policy check completed.",
+                "target": "patch",
+                "decision": "denied",
+                "reason": (
+                    "Patch target policy check failed. "
+                    f"Violations: {len(exc.policy_result['violations'])}."
+                ),
+            }
+        )
+        audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Candidate patch blocked.",
+                "target": "patch",
+                "decision": "denied",
+                "reason": str(exc),
+            }
+        )
+        return {
+            "workflow_stage": "blocked",
+            "patch_policy_result": exc.policy_result,
+            "review_status": {
+                "status": "blocked",
+                "known_limitations": [str(exc)],
+            },
+            "audit": audit,
+        }
+    except PatchValidationError as exc:
+        audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Candidate patch failed validation.",
+                "target": "patch",
+                "decision": "denied",
+                "reason": str(exc),
+            }
+        )
+        return {
+            "workflow_stage": "blocked",
+            "review_status": {
+                "status": "blocked",
+                "known_limitations": [str(exc)],
+            },
+            "audit": audit,
+        }
+
+    audit.append(
+        {
+            "event_type": "policy_checked",
+            "actor": "harness",
+            "message": "Patch policy check completed.",
+            "target": "patch",
+            "decision": "allowed",
+            "reason": (
+                "Patch targets and limits were checked. "
+                f"Checked rules: {', '.join(patch_policy_result.get('checked_rules', []))}."
+            ),
+        }
+    )
+    audit.append(
+        {
+            "event_type": "patch_validated",
+            "actor": "harness",
+            "message": "Candidate unified diff validated.",
+            "target": "patch",
+            "decision": "allowed",
+            "reason": (
+                f"Validated {len(patch['target_files'])} file(s), "
+                f"{patch.get('changed_lines', 0)} changed line(s), "
+                f"{patch.get('size_bytes', 0)} byte(s)."
+            ),
+        }
+    )
+
+    return {
+        "workflow_stage": "ready_for_human_review",
+        "patch": patch,
+        "patch_policy_result": patch_policy_result,
+        "review_status": {
+            "status": "ready_for_human_review",
+            "diff_summary": patch.get("summary", "Validated unified diff ready for human review."),
+            "changed_files": patch["target_files"],
+            "risks": state["change_plan"]["policy_risks"],
+            "known_limitations": ["Patch was validated but not applied; test execution starts in Phase 8."],
+        },
+        "audit": audit,
+    }
+
+
 def inspection_route(state: AgentState) -> str:
     if state.get("workflow_stage") == "blocked":
         return "blocked"
@@ -467,6 +627,58 @@ def build_coding_change_plan_graph(llm: DiagnosisLLM, planner: ChangePlanner):
     return builder.compile()
 
 
+def build_coding_patch_graph(llm: DiagnosisLLM, planner: ChangePlanner, patch_generator: PatchGenerator):
+    builder = StateGraph(AgentState)
+    builder.add_node("intake_task", intake_task)
+    builder.add_node("inspect_repository", inspect_repository)
+    builder.add_node("select_relevant_files", select_relevant_files)
+    builder.add_node("summarize_project_context", summarize_project_context)
+    builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
+    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner))
+    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator))
+    builder.add_node("blocked", blocked)
+
+    builder.add_edge(START, "intake_task")
+    builder.add_edge("intake_task", "inspect_repository")
+    builder.add_conditional_edges(
+        "inspect_repository",
+        inspection_route,
+        {
+            "select_relevant_files": "select_relevant_files",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "select_relevant_files",
+        select_route,
+        {
+            "summarize_project_context": "summarize_project_context",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_edge("summarize_project_context", "diagnose_task")
+    builder.add_conditional_edges(
+        "diagnose_task",
+        diagnosis_route,
+        {
+            "propose_change_plan": "propose_change_plan",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "propose_change_plan",
+        change_plan_route,
+        {
+            "generate_patch": "generate_patch",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_edge("generate_patch", END)
+    builder.add_edge("blocked", END)
+
+    return builder.compile()
+
+
 def _blocked_state(
     state: AgentState,
     reason: str,
@@ -499,6 +711,12 @@ def diagnosis_route(state: AgentState) -> str:
     if state.get("workflow_stage") == "blocked":
         return "blocked"
     return "propose_change_plan"
+
+
+def change_plan_route(state: AgentState) -> str:
+    if state.get("workflow_stage") == "blocked":
+        return "blocked"
+    return "generate_patch"
 
 
 def _discover_baseline_tests(files: list[str]) -> list[str]:
