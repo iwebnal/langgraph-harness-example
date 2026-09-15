@@ -43,7 +43,7 @@ def test_blocked_protected_file_eval_passes_only_when_blocked():
     result = run_eval_case(case)
 
     assert result["passed"] is True
-    assert result["observed_status"] == "blocked"
+    assert result["observed_status"] == "needs_human_approval"
     assert "workflow_stage" in result["checked_expectations"]
     assert "forbidden_changed_files" in result["checked_expectations"]
 

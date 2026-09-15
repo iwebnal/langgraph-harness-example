@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, TypedDict
 
+from .checkpoint import generate_run_id
 from .coding_graph import build_coding_diff_review_graph
 from .graph import graph as release_triage_graph
 
@@ -94,7 +95,23 @@ def _run_coding_mvp_case(case: dict[str, Any]) -> EvalResult:
             timeout_seconds=5,
             command_runner=_FakeCommandRunner(case.get("test_results", [_test_result("passed")])),
         )
-        state = graph.invoke({"request": case["request"], "repo_context": {"repo_root": str(repo_root)}})
+        state = graph.invoke(
+            {
+                "request": case["request"],
+                "repo_context": {"repo_root": str(repo_root)},
+                "approval_decisions": [
+                    {
+                        "status": "approved",
+                        "approver": "eval-reviewer",
+                        "reason": "Eval permits deterministic final review aggregation.",
+                        "scope": "final_review",
+                        "run_id": generate_run_id(case["request"]),
+                        "decided_at": "2026-09-15T00:00:00Z",
+                        "one_time_use": True,
+                    }
+                ],
+            }
+        )
 
     expect = case["expect"]
     review = state.get("review_status", {})

@@ -9,6 +9,7 @@ CodingWorkflowStage = Literal[
     "diagnosing",
     "planning",
     "policy_checking",
+    "needs_human_approval",
     "patching",
     "testing",
     "repairing",
@@ -19,10 +20,19 @@ CodingWorkflowStage = Literal[
 PolicyCheckStage = Literal["plan", "patch", "command", "review"]
 ReviewStatus = Literal[
     "not_started",
+    "needs_human_approval",
     "needs_changes",
     "ready_for_human_review",
     "blocked",
 ]
+ApprovalScope = Literal[
+    "final_review",
+    "protected_file_change",
+    "high_risk_change",
+    "future_controlled_apply",
+    "policy_change",
+]
+ApprovalDecisionStatus = Literal["approved", "rejected", "pending", "expired"]
 TestStatus = Literal["not_run", "passed", "failed", "error"]
 PatchStatus = Literal["proposed", "validated", "applied", "rejected"]
 AuditActor = Literal["user", "agent", "llm", "harness", "tool", "human"]
@@ -149,6 +159,27 @@ class CheckpointMetadata(TypedDict):
     resumed: NotRequired[bool]
 
 
+class ApprovalRequest(TypedDict):
+    request_id: str
+    scope: ApprovalScope
+    reason: str
+    run_id: NotRequired[str]
+    requested_at: str
+    expires_at: NotRequired[str]
+    one_time_use: NotRequired[bool]
+
+
+class ApprovalDecision(TypedDict):
+    status: ApprovalDecisionStatus
+    approver: str
+    reason: str
+    scope: ApprovalScope
+    run_id: NotRequired[str]
+    decided_at: str
+    expires_at: NotRequired[str]
+    one_time_use: NotRequired[bool]
+
+
 class AuditEvent(TypedDict):
     event_type: str
     actor: AuditActor
@@ -186,5 +217,7 @@ class AgentState(TypedDict):
     test_results: NotRequired[list[TestResult]]
     repair_attempts: NotRequired[list[RepairAttempt]]
     review_status: NotRequired[ReviewSummary]
+    approval_requests: NotRequired[list[ApprovalRequest]]
+    approval_decisions: NotRequired[list[ApprovalDecision]]
     run_id: NotRequired[str]
     checkpoint: NotRequired[CheckpointMetadata]

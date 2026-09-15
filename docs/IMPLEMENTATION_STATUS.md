@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 12 — Checkpointing and durable audit
+Current phase: Phase 13 — Human-in-the-loop
 
 Status: Completed
 
@@ -161,6 +161,18 @@ Phase 12 добавил checkpointing and durable audit boundaries:
 - stores run_id and checkpoint metadata in `AgentState` during final diff review when `repo_context.repo_root` is available;
 - preserves core patch/test/repair/review behavior and adds no Git/GitHub, sandbox, deployment, network or arbitrary shell capability.
 
+Phase 13 добавил deterministic human-in-the-loop approval gates:
+
+- defines structured `ApprovalRequest` and `ApprovalDecision` state schemas with scope, status, approver, reason, timestamp, run_id and one-time-use/expiration metadata;
+- adds a deterministic approval module in `src/release_triage_agent/approval.py` with request creation, decision validation, scope/run_id matching and expiration handling;
+- adds explicit ChangePlan gates for approval-required high-risk markers, protected file changes and policy-related changes;
+- adds a final review approval gate before deterministic diff review aggregation;
+- represents future controlled apply as an approval contract only, without implementing apply;
+- records `approval_requested`, `approval_received` and `approval_rejected` audit events;
+- stops pending approvals with controlled `needs_human_approval` or `ready_for_human_review` states instead of continuing execution;
+- stops rejected or expired approvals with controlled blocked state and clear reason;
+- preserves release triage behavior and adds no Git/GitHub, sandbox, deployment, network or arbitrary shell capability.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -176,7 +188,7 @@ Phase 12 добавил checkpointing and durable audit boundaries:
 - [x] Phase 10 — Diff review state
 - [x] Phase 11 — MVP evals
 - [x] Phase 12 — Checkpointing and durable audit
-- [ ] Phase 13 — Human-in-the-loop
+- [x] Phase 13 — Human-in-the-loop
 - [ ] Phase 14 — Git boundaries
 - [ ] Phase 15 — GitHub boundaries
 - [ ] Phase 16 — Sandbox execution
@@ -238,6 +250,13 @@ Phase 12 добавил checkpointing and durable audit boundaries:
 - Final diff review now assigns/stores `run_id` and checkpoint metadata when a repository root is available.
 - Extended `AgentState` with checkpoint metadata.
 - Added focused checkpoint/resume/redaction tests in `tests/test_checkpoint.py`.
+- Phase 13 human approval support added in `src/release_triage_agent/approval.py`.
+- Extended `AgentState` with `ApprovalRequest`, `ApprovalDecision`, approval scopes, approval decisions and approval requests.
+- ChangePlan policy approvals now stop at `needs_human_approval` for high-risk, protected-file and policy-related boundaries unless a matching approved decision is present.
+- Final diff review is now preceded by an explicit final review approval gate; pending final review approval stops at `ready_for_human_review` without unsafe actions.
+- Future controlled apply is represented as an approval contract only; no apply implementation was added.
+- Added focused approval tests in `tests/test_approval.py`.
+- Updated MVP eval expectations for protected policy changes to require explicit approval rather than silently proceeding.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -269,15 +288,19 @@ Baseline result before Phase 12: 97 passed.
 
 Final result after Phase 12: 110 passed.
 
+Baseline result before Phase 13: 110 passed.
+
+Final result after Phase 13: 120 passed.
+
 ## Current Work
 
-Phase 12 завершена. Durable audit/checkpoint records are repo-local JSONL artifacts with deterministic run IDs, schema validation, redaction before write and fail-closed resume behavior.
+Phase 13 завершена. Human approval requests and decisions are now structured, scoped, audited and enforced deterministically around high-risk/protected/policy ChangePlans, final review and the future controlled apply boundary contract.
 
 ## Next Actions
 
-1. Начать Phase 13: Human-in-the-loop.
-2. Add explicit human approval/rejection gates around final review and any future controlled apply boundary.
-3. Keep Git/GitHub integration, sandbox and deployment out until their dedicated phases.
+1. Начать Phase 14: Git boundaries.
+2. Add read-only Git context and local diff awareness through a safe wrapper.
+3. Detect dirty worktree and prevent overwriting unrelated user changes without adding push, merge, PR, sandbox or deployment capabilities.
 
 ## Known Issues
 
@@ -295,6 +318,8 @@ Phase 12 завершена. Durable audit/checkpoint records are repo-local JSO
 - Durable checkpointing is repo-local only; no database, cloud storage or production logging exists.
 - Retention is currently a deterministic non-deleting cleanup plan; manual or automated deletion policy is intentionally deferred.
 - No durable eval result storage is wired yet; eval results remain returned in memory unless a caller persists workflow state through checkpointing.
+- Human approvals are accepted from structured state only; there is no external approval ticket system or LangGraph interrupt UI yet.
+- Protected/policy-related ChangePlans now stop for approval, but controlled apply remains unavailable, so approval does not implement or imply filesystem mutation.
 
 ## Decisions
 
@@ -324,6 +349,11 @@ Phase 12 завершена. Durable audit/checkpoint records are repo-local JSO
 - Durable audit and state snapshots are JSONL files under protected `harness/audit/<run_id>/`; records are appended, redacted before write and validated on read.
 - Resume is fail-closed for missing, corrupt, invalid or mismatched checkpoint data and never silently overwrites previous audit records.
 - Retention is represented as a deterministic plan only; it does not delete files.
+- Phase 13 approval enforcement is deterministic Python code, not LLM/prompt-based.
+- Approval decisions are valid only for the matching scope and matching run_id when a run_id is present; approval for one scope never grants another.
+- Approved decisions must include either `one_time_use=true` or a future `expires_at`; expired decisions are invalid.
+- Pending final review approval stops at `ready_for_human_review` and does not run diff review aggregation or any unsafe action.
+- The future controlled apply boundary is represented as an approval contract only; apply remains unimplemented until a later phase.
 
 ## Baseline Test Command
 

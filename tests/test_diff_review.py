@@ -1,4 +1,5 @@
 from release_triage_agent.coding_graph import build_coding_diff_review_graph, diff_review
+from release_triage_agent.checkpoint import generate_run_id
 from release_triage_agent.graph import graph as release_triage_graph
 
 
@@ -156,8 +157,22 @@ def fake_test_result(status, exit_code=1, summary=None):
     return result
 
 
-def run_review_graph(tmp_path, *, test_results, repair_patches=None):
+def run_review_graph(tmp_path, *, test_results, repair_patches=None, final_review_approved=True):
     make_repo(tmp_path)
+    request = "Inspect policy route behavior"
+    approval_decisions = []
+    if final_review_approved:
+        approval_decisions.append(
+            {
+                "status": "approved",
+                "approver": "reviewer@example.com",
+                "reason": "Ready to aggregate final review.",
+                "scope": "final_review",
+                "run_id": generate_run_id(request),
+                "decided_at": "2026-09-15T00:00:00Z",
+                "one_time_use": True,
+            }
+        )
     graph = build_coding_diff_review_graph(
         FakeDiagnosisLLM(diagnosis()),
         FakePlanner(change_plan()),
@@ -169,8 +184,9 @@ def run_review_graph(tmp_path, *, test_results, repair_patches=None):
     )
     return graph.invoke(
         {
-            "request": "Inspect policy route behavior",
+            "request": request,
             "repo_context": {"repo_root": str(tmp_path)},
+            "approval_decisions": approval_decisions,
         }
     )
 
@@ -260,6 +276,21 @@ def test_review_audit_includes_diff_review_and_ready_for_human_review_events(tmp
 
     event_types = [event["event_type"] for event in result["audit"] if isinstance(event, dict)]
     assert event_types[-2:] == ["diff_review", "ready_for_human_review"]
+
+
+def test_final_review_gate_produces_ready_for_human_review_without_unsafe_actions(tmp_path):
+    result = run_review_graph(
+        tmp_path,
+        test_results=[fake_test_result("passed", exit_code=0)],
+        final_review_approved=False,
+    )
+
+    assert result["workflow_stage"] == "ready_for_human_review"
+    assert result["review_status"]["final_status"] == "pending_final_review_approval"
+    assert result["approval_requests"][-1]["scope"] == "final_review"
+    event_types = [event["event_type"] for event in result["audit"] if isinstance(event, dict)]
+    assert "approval_requested" in event_types
+    assert "diff_review" not in event_types
 
 
 def test_existing_release_triage_graph_still_works_after_diff_review_phase():

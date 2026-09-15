@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from langgraph.graph import END, START, StateGraph
 
+from .approval import evaluate_approval_gate, required_approval_scope
 from .change_plan import (
     ChangePlanner,
     ChangePlanValidationError,
@@ -322,6 +323,29 @@ def propose_change_plan(state: AgentState, planner: ChangePlanner) -> AgentState
     )
 
     if not policy_result["allowed"]:
+        approval_scope = required_approval_scope(change_plan, policy_result)
+        if approval_scope:
+            run_id = assign_run_id({**state, "change_plan": change_plan})
+            gate = evaluate_approval_gate(
+                {**state, "run_id": run_id},
+                scope=approval_scope,
+                reason="ChangePlan targets a protected, high-risk, or policy-related boundary.",
+                run_id=run_id,
+            )
+            return _approval_stop_state(
+                state,
+                audit,
+                gate,
+                target="change_plan",
+                pending_workflow_stage="needs_human_approval",
+                pending_review_status="needs_human_approval",
+                pending_reason="ChangePlan requires human approval before any further workflow step.",
+                extra_state={
+                    "run_id": run_id,
+                    "change_plan": change_plan,
+                    "policy_result": policy_result,
+                },
+            )
         audit.append(
             {
                 "event_type": "run_blocked",
@@ -343,8 +367,37 @@ def propose_change_plan(state: AgentState, planner: ChangePlanner) -> AgentState
             "audit": audit,
         }
 
+    approved_run_id = None
+    approval_scope = required_approval_scope(change_plan, policy_result)
+    if approval_scope:
+        run_id = assign_run_id({**state, "change_plan": change_plan})
+        gate = evaluate_approval_gate(
+            {**state, "run_id": run_id},
+            scope=approval_scope,
+            reason="ChangePlan requires explicit human approval before patch generation.",
+            run_id=run_id,
+        )
+        if gate["status"] != "approved":
+            return _approval_stop_state(
+                state,
+                audit,
+                gate,
+                target="change_plan",
+                pending_workflow_stage="needs_human_approval",
+                pending_review_status="needs_human_approval",
+                pending_reason="ChangePlan requires human approval before patch generation.",
+                extra_state={
+                    "run_id": run_id,
+                    "change_plan": change_plan,
+                    "policy_result": policy_result,
+                },
+            )
+        audit = _audit_approval_gate(state, audit, gate, target="change_plan")
+        approved_run_id = run_id
+
     return {
         "workflow_stage": "ready_for_human_review",
+        **({"run_id": approved_run_id} if approved_run_id else {}),
         "change_plan": change_plan,
         "policy_result": policy_result,
         "review_status": {
@@ -1019,6 +1072,75 @@ def diff_review(state: AgentState) -> AgentState:
     return output_state
 
 
+def final_review_gate(state: AgentState) -> AgentState:
+    run_id = assign_run_id(state)
+    reason = "Final review requires explicit human acknowledgement before deterministic review aggregation proceeds."
+    gate = evaluate_approval_gate(
+        {**state, "run_id": run_id},
+        scope="final_review",
+        reason=reason,
+        run_id=run_id,
+    )
+    audit = _audit_approval_gate(state, state.get("audit", []), gate, target="final_review")
+    if gate["status"] == "approved":
+        return {
+            "workflow_stage": "reviewing",
+            "run_id": run_id,
+            "approval_requests": [*state.get("approval_requests", []), gate["request"]],
+            "audit": audit,
+        }
+    if gate["status"] == "rejected":
+        audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Final review rejected by human approver.",
+                "target": "final_review",
+                "decision": "denied",
+                "reason": gate["reason"],
+            }
+        )
+        return {
+            "workflow_stage": "blocked",
+            "run_id": run_id,
+            "approval_requests": [*state.get("approval_requests", []), gate["request"]],
+            "review_status": {"status": "blocked", "known_limitations": [gate["reason"]]},
+            "audit": audit,
+        }
+    if gate["status"] == "expired":
+        audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Final review approval expired.",
+                "target": "final_review",
+                "decision": "denied",
+                "reason": gate["reason"],
+            }
+        )
+        return {
+            "workflow_stage": "blocked",
+            "run_id": run_id,
+            "approval_requests": [*state.get("approval_requests", []), gate["request"]],
+            "review_status": {"status": "blocked", "known_limitations": [gate["reason"]]},
+            "audit": audit,
+        }
+
+    return {
+        "workflow_stage": "ready_for_human_review",
+        "run_id": run_id,
+        "approval_requests": [*state.get("approval_requests", []), gate["request"]],
+        "review_status": {
+            "status": "ready_for_human_review",
+            "final_status": "pending_final_review_approval",
+            "diff_summary": "Final review approval is pending; no unsafe action was performed.",
+            "changed_files": state.get("patch", {}).get("target_files", []),
+            "known_limitations": [gate["reason"]],
+        },
+        "audit": audit,
+    }
+
+
 def inspection_route(state: AgentState) -> str:
     if state.get("workflow_stage") == "blocked":
         return "blocked"
@@ -1412,6 +1534,7 @@ def build_coding_diff_review_graph(
             command_runner=command_runner,
         ),
     )
+    builder.add_node("final_review_gate", final_review_gate)
     builder.add_node("diff_review", diff_review)
     builder.add_node("blocked", blocked)
 
@@ -1463,7 +1586,7 @@ def build_coding_diff_review_graph(
         repair_review_route,
         {
             "perform_repair_attempt": "perform_repair_attempt",
-            "diff_review": "diff_review",
+            "diff_review": "final_review_gate",
             "blocked": "blocked",
         },
     )
@@ -1472,8 +1595,17 @@ def build_coding_diff_review_graph(
         repair_review_route,
         {
             "perform_repair_attempt": "perform_repair_attempt",
+            "diff_review": "final_review_gate",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "final_review_gate",
+        final_review_route,
+        {
             "diff_review": "diff_review",
             "blocked": "blocked",
+            "end": END,
         },
     )
     builder.add_edge("diff_review", END)
@@ -1510,6 +1642,122 @@ def _blocked_state(
     }
 
 
+def _audit_approval_gate(
+    state: AgentState,
+    audit: list[AuditEntry],
+    gate: dict[str, Any],
+    *,
+    target: str,
+) -> list[AuditEntry]:
+    updated = [
+        *audit,
+        {
+            "event_type": "approval_requested",
+            "actor": "harness",
+            "message": "Human approval requested.",
+            "target": target,
+            "decision": gate["status"],
+            "reason": gate["request"]["reason"],
+        },
+    ]
+    decision = gate.get("decision")
+    if gate["status"] == "approved" and decision:
+        updated.append(
+            {
+                "event_type": "approval_received",
+                "actor": "human",
+                "message": "Human approval accepted.",
+                "target": target,
+                "decision": "approved",
+                "reason": decision["reason"],
+            }
+        )
+    elif gate["status"] == "rejected" and decision:
+        updated.append(
+            {
+                "event_type": "approval_rejected",
+                "actor": "human",
+                "message": "Human approval rejected.",
+                "target": target,
+                "decision": "rejected",
+                "reason": decision["reason"],
+            }
+        )
+    elif gate["status"] == "expired":
+        updated.append(
+            {
+                "event_type": "approval_rejected",
+                "actor": "harness",
+                "message": "Human approval expired.",
+                "target": target,
+                "decision": "expired",
+                "reason": gate["reason"],
+            }
+        )
+    return updated
+
+
+def _approval_stop_state(
+    state: AgentState,
+    audit: list[AuditEntry],
+    gate: dict[str, Any],
+    *,
+    target: str,
+    pending_workflow_stage: str,
+    pending_review_status: str,
+    pending_reason: str,
+    extra_state: dict[str, Any] | None = None,
+) -> AgentState:
+    updated_audit = _audit_approval_gate(state, audit, gate, target=target)
+    common_state = {
+        **(extra_state or {}),
+        "approval_requests": [*state.get("approval_requests", []), gate["request"]],
+        "audit": updated_audit,
+    }
+    if gate["status"] == "pending":
+        return {
+            **common_state,
+            "workflow_stage": pending_workflow_stage,
+            "review_status": {
+                "status": pending_review_status,
+                "known_limitations": [pending_reason],
+            },
+        }
+    if gate["status"] == "rejected":
+        updated_audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Workflow stopped because human approval was rejected.",
+                "target": target,
+                "decision": "denied",
+                "reason": gate["reason"],
+            }
+        )
+        return {
+            **common_state,
+            "workflow_stage": "blocked",
+            "review_status": {"status": "blocked", "known_limitations": [gate["reason"]]},
+            "audit": updated_audit,
+        }
+    updated_audit.append(
+        {
+            "event_type": "run_blocked",
+            "actor": "harness",
+            "message": "Workflow stopped because human approval is invalid or expired.",
+            "target": target,
+            "decision": "denied",
+            "reason": gate["reason"],
+        }
+    )
+    return {
+        **common_state,
+        "workflow_stage": "blocked",
+        "review_status": {"status": "blocked", "known_limitations": [gate["reason"]]},
+        "audit": updated_audit,
+    }
+
+
 def diagnosis_route(state: AgentState) -> str:
     if state.get("workflow_stage") == "blocked":
         return "blocked"
@@ -1518,6 +1766,8 @@ def diagnosis_route(state: AgentState) -> str:
 
 def change_plan_route(state: AgentState) -> str:
     if state.get("workflow_stage") == "blocked":
+        return "blocked"
+    if state.get("workflow_stage") == "needs_human_approval":
         return "blocked"
     return "generate_patch"
 
@@ -1546,6 +1796,14 @@ def repair_review_route(state: AgentState) -> str:
     if repair_limit_reached(state.get("repair_attempts", [])):
         return "diff_review"
     return "perform_repair_attempt"
+
+
+def final_review_route(state: AgentState) -> str:
+    if state.get("workflow_stage") == "blocked":
+        return "blocked"
+    if state.get("workflow_stage") == "reviewing":
+        return "diff_review"
+    return "end"
 
 
 def _test_execution_prerequisite_error(state: AgentState) -> str | None:

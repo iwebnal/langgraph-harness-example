@@ -191,7 +191,8 @@ def test_patch_graph_does_not_call_generator_when_plan_policy_blocks(tmp_path):
         }
     )
 
-    assert result["workflow_stage"] == "blocked"
+    assert result["workflow_stage"] == "needs_human_approval"
     assert patch_generator.calls == []
     assert "patch" not in result
-    assert result["audit"][-1]["event_type"] == "run_blocked"
+    assert result["approval_requests"][-1]["scope"] == "policy_change"
+    assert result["audit"][-1]["event_type"] == "approval_requested"

@@ -23,6 +23,8 @@ def test_agent_state_includes_coding_agent_mvp_fields():
         "test_results",
         "repair_attempts",
         "review_status",
+        "approval_requests",
+        "approval_decisions",
         "audit",
     } <= optional_keys
 
@@ -36,6 +38,7 @@ def test_workflow_stage_can_distinguish_mvp_vertical_slice_steps():
         "diagnosing",
         "planning",
         "policy_checking",
+        "needs_human_approval",
         "patching",
         "testing",
         "repairing",
