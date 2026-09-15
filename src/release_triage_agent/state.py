@@ -141,6 +141,14 @@ class ReviewSummary(TypedDict):
     stopped_reason: NotRequired[str]
 
 
+class CheckpointMetadata(TypedDict):
+    run_id: str
+    audit_path: str
+    snapshots_path: str
+    latest_sequence: int
+    resumed: NotRequired[bool]
+
+
 class AuditEvent(TypedDict):
     event_type: str
     actor: AuditActor
@@ -178,3 +186,5 @@ class AgentState(TypedDict):
     test_results: NotRequired[list[TestResult]]
     repair_attempts: NotRequired[list[RepairAttempt]]
     review_status: NotRequired[ReviewSummary]
+    run_id: NotRequired[str]
+    checkpoint: NotRequired[CheckpointMetadata]

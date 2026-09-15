@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 11 — MVP evals
+Current phase: Phase 12 — Checkpointing and durable audit
 
 Status: Completed
 
@@ -150,6 +150,17 @@ Phase 11 добавил local deterministic MVP evals:
 - verifies expectations for final status, changed files, protected files, test statuses, max changed files, max repair attempts and required audit events;
 - performs no network access, no real LLM/API calls, no arbitrary shell, no checkpointing, Git/GitHub, sandbox or deployment actions.
 
+Phase 12 добавил checkpointing and durable audit boundaries:
+
+- defines deterministic safe run IDs with validation in `src/release_triage_agent/checkpoint.py`;
+- persists append-only JSONL audit records and state snapshots under repo-local `harness/audit/<run_id>/`;
+- redacts sensitive keys and inline secret/token/password/API-key values before any durable write;
+- validates checkpoint schema and run_id consistency on load/resume;
+- fails closed for missing, corrupt, invalid or mismatched checkpoints;
+- exposes deterministic retention planning without deleting files;
+- stores run_id and checkpoint metadata in `AgentState` during final diff review when `repo_context.repo_root` is available;
+- preserves core patch/test/repair/review behavior and adds no Git/GitHub, sandbox, deployment, network or arbitrary shell capability.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -164,7 +175,7 @@ Phase 11 добавил local deterministic MVP evals:
 - [x] Phase 9 — Repair loop
 - [x] Phase 10 — Diff review state
 - [x] Phase 11 — MVP evals
-- [ ] Phase 12 — Checkpointing and durable audit
+- [x] Phase 12 — Checkpointing and durable audit
 - [ ] Phase 13 — Human-in-the-loop
 - [ ] Phase 14 — Git boundaries
 - [ ] Phase 15 — GitHub boundaries
@@ -223,6 +234,10 @@ Phase 11 добавил local deterministic MVP evals:
 - Phase 11 local eval runner added in `src/release_triage_agent/evals.py`.
 - `harness/eval_cases.jsonl` migrated to explicit eval cases while preserving release triage scenarios.
 - Added focused eval runner tests in `tests/test_evals.py`.
+- Phase 12 durable checkpoint/audit support added in `src/release_triage_agent/checkpoint.py`.
+- Final diff review now assigns/stores `run_id` and checkpoint metadata when a repository root is available.
+- Extended `AgentState` with checkpoint metadata.
+- Added focused checkpoint/resume/redaction tests in `tests/test_checkpoint.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -250,24 +265,25 @@ Baseline result before Phase 11: 87 passed.
 
 Final result after Phase 11: 97 passed.
 
+Baseline result before Phase 12: 97 passed.
+
+Final result after Phase 12: 110 passed.
+
 ## Current Work
 
-Phase 11 завершена. MVP eval cases are local JSONL records and the deterministic eval runner checks release triage plus coding MVP behavior with fake bounded components and structured expectation failures.
+Phase 12 завершена. Durable audit/checkpoint records are repo-local JSONL artifacts with deterministic run IDs, schema validation, redaction before write and fail-closed resume behavior.
 
 ## Next Actions
 
-1. Начать Phase 12: Checkpointing and durable audit.
-2. Add run IDs and state snapshot/audit persistence boundaries.
-3. Define retention/redaction behavior for durable audit.
-4. Ensure interrupted runs can resume safely without silently overwriting audit.
-5. Не добавлять Git/GitHub integration, sandbox или deployment до соответствующих фаз.
+1. Начать Phase 13: Human-in-the-loop.
+2. Add explicit human approval/rejection gates around final review and any future controlled apply boundary.
+3. Keep Git/GitHub integration, sandbox and deployment out until their dedicated phases.
 
 ## Known Issues
 
 - MVP eval cases now cover release triage and coding workflow behavior, but there is no standalone CLI wrapper yet.
 - Patch validation exists, but no controlled patch application step has been enabled yet.
 - Command allowlist runner exists only for `pytest` and `python -m pytest`; no lint/typecheck/package commands are allowed yet.
-- Нет durable checkpointing.
 - Нет Git/GitHub boundaries.
 - Structured diagnosis currently depends on deterministic heuristic relevant-file selection from Phase 3.
 - Phase 4 uses fake/mocked LLMs in tests; no real LLM API integration is configured.
@@ -276,7 +292,9 @@ Phase 11 завершена. MVP eval cases are local JSONL records and the dete
 - Phase 8 runs tests against the current working tree after patch validation; a controlled apply step is still not enabled in this architecture.
 - Repair loop exists, but because controlled patch application is not enabled yet, tests still run against the current working tree rather than applied candidate diffs.
 - Final diff review is deterministic and state-based; richer human review formatting can be improved later without changing enforcement boundaries.
-- No durable eval result storage exists yet; eval results are returned in memory until Phase 12 introduces durable audit/checkpointing.
+- Durable checkpointing is repo-local only; no database, cloud storage or production logging exists.
+- Retention is currently a deterministic non-deleting cleanup plan; manual or automated deletion policy is intentionally deferred.
+- No durable eval result storage is wired yet; eval results remain returned in memory unless a caller persists workflow state through checkpointing.
 
 ## Decisions
 
@@ -302,6 +320,10 @@ Phase 11 завершена. MVP eval cases are local JSONL records and the dete
 - `diff_review` appends review audit events and does not mutate patch, run commands or perform repository writes.
 - Phase 11 eval runner is local-only and deterministic; coding MVP evals use fake bounded components and the same graph/policy/patch/test validation paths.
 - Legacy release triage eval records with `expected_risk` and `expected_route` remain readable through loader migration.
+- Phase 12 uses deterministic run IDs derived from task/request text when a valid run_id is not supplied.
+- Durable audit and state snapshots are JSONL files under protected `harness/audit/<run_id>/`; records are appended, redacted before write and validated on read.
+- Resume is fail-closed for missing, corrupt, invalid or mismatched checkpoint data and never silently overwrites previous audit records.
+- Retention is represented as a deterministic plan only; it does not delete files.
 
 ## Baseline Test Command
 

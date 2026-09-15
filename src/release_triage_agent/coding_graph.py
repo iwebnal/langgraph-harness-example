@@ -10,6 +10,7 @@ from .change_plan import (
     ChangePlanValidationError,
     validate_change_plan_output,
 )
+from .checkpoint import CheckpointError, assign_run_id, persist_checkpoint
 from .diagnosis import DiagnosisLLM, DiagnosisValidationError, validate_diagnosis_output
 from .harness_policy import check_change_plan_policy
 from .patch import (
@@ -938,6 +939,7 @@ def perform_repair_attempt(
 
 
 def diff_review(state: AgentState) -> AgentState:
+    run_id = assign_run_id(state)
     latest_test_result = state.get("test_results", [])[-1] if state.get("test_results") else None
     patch = state.get("patch")
     diagnosis = state.get("diagnosis", {})
@@ -991,12 +993,30 @@ def diff_review(state: AgentState) -> AgentState:
             "reason": "; ".join(known_limitations) if known_limitations else "Review summary prepared.",
         }
     )
-
-    return {
+    output_state = {
         "workflow_stage": "ready_for_human_review",
+        "run_id": run_id,
         "review_status": review_status,
         "audit": audit,
     }
+    repo_root = state.get("repo_context", {}).get("repo_root")
+    if repo_root:
+        try:
+            checkpoint = persist_checkpoint(
+                {**state, **output_state},
+                repo_root=repo_root,
+                run_id=run_id,
+            )
+        except CheckpointError as exc:
+            return _blocked_state(
+                {**state, "run_id": run_id, "audit": audit},
+                f"Durable checkpoint failed: {exc}",
+                event_type="run_blocked",
+                target="checkpoint",
+            )
+        output_state["checkpoint"] = checkpoint
+
+    return output_state
 
 
 def inspection_route(state: AgentState) -> str:
