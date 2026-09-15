@@ -14,6 +14,7 @@ from .change_plan import (
 from .checkpoint import CheckpointError, assign_run_id, persist_checkpoint
 from .diagnosis import DiagnosisLLM, DiagnosisValidationError, validate_diagnosis_output
 from .git_boundary import GitBoundaryError, inspect_git_context
+from .github_boundary import GitHubBoundaryError, prepare_github_draft
 from .harness_policy import check_change_plan_policy
 from .patch import (
     PatchGenerator,
@@ -30,6 +31,7 @@ from .repair import (
     repair_limit_reached,
     validate_repair_output,
 )
+from .sandbox import SandboxBoundaryError, create_sandbox_session, default_sandbox_config, sandbox_result_metadata
 from .state import AgentState, AuditEntry
 from .test_runner import CommandValidationError, resolve_command_cwd, run_test_command, validate_test_command
 
@@ -595,13 +597,14 @@ def run_tests(
                 "reason": "Command will be validated as structured argv before execution.",
             },
         )
-        test_result = _run_validated_test_command(
+        test_result, sandbox_audit = _run_validated_test_command(
             command,
             repo_root=state["repo_context"]["repo_root"],
             timeout_seconds=timeout_seconds,
             command_runner=command_runner,
         )
-    except CommandValidationError as exc:
+        audit.extend(sandbox_audit)
+    except (CommandValidationError, SandboxBoundaryError) as exc:
         audit = append_structured_audit(
             state,
             {
@@ -646,6 +649,7 @@ def run_tests(
             "changed_files": state["patch"]["target_files"],
             "risks": state["change_plan"]["policy_risks"],
             "known_limitations": ["Repair loop is not implemented until Phase 9."],
+            "sandbox": test_result.get("sandbox", {}),
         },
         "audit": audit,
     }
@@ -896,13 +900,14 @@ def perform_repair_attempt(
                 "reason": "Command will be validated as structured argv before execution.",
             }
         )
-        test_result = _run_validated_test_command(
+        test_result, sandbox_audit = _run_validated_test_command(
             command,
             repo_root=state["repo_context"]["repo_root"],
             timeout_seconds=timeout_seconds,
             command_runner=command_runner,
         )
-    except CommandValidationError as exc:
+        audit.extend(sandbox_audit)
+    except (CommandValidationError, SandboxBoundaryError) as exc:
         audit.append(
             {
                 "event_type": "run_blocked",
@@ -987,6 +992,7 @@ def perform_repair_attempt(
             "changed_files": patch["target_files"],
             "risks": repair_change_plan["policy_risks"],
             "known_limitations": limitations,
+            "sandbox": test_result.get("sandbox", {}),
         },
         "audit": audit,
     }
@@ -1038,11 +1044,32 @@ def diff_review(state: AgentState) -> AgentState:
         review_status["git"] = git_context
     if latest_test_result:
         review_status["latest_test_result"] = latest_test_result
+        if latest_test_result.get("sandbox"):
+            review_status["sandbox"] = latest_test_result["sandbox"]
     if blocked_reason:
         review_status["stopped_reason"] = blocked_reason
 
+    github_audit: list[dict[str, Any]] = []
+    github_draft = None
+    if state.get("github_context"):
+        try:
+            github_draft = prepare_github_draft(state["github_context"], review_status, audit=github_audit)
+            review_status["github_draft"] = github_draft
+        except GitHubBoundaryError as exc:
+            github_audit.append(
+                {
+                    "event_type": "github_context_read",
+                    "actor": "harness",
+                    "target": "github_context",
+                    "decision": "denied",
+                    "reason": str(exc),
+                }
+            )
+            known_limitations.append(f"GitHub context unavailable: {exc}")
+            review_status["known_limitations"] = known_limitations
+
     audit = append_structured_audit(
-        {**state, "audit": [*state.get("audit", []), *git_audit]},
+        {**state, "audit": [*state.get("audit", []), *git_audit, *github_audit]},
         {
             "event_type": "diff_review",
             "actor": "agent",
@@ -1073,6 +1100,8 @@ def diff_review(state: AgentState) -> AgentState:
             **state.get("repo_context", {}),
             "git": git_context,
         }
+    if github_draft:
+        output_state["github_draft"] = github_draft
     if repo_root:
         try:
             checkpoint = persist_checkpoint(
@@ -1869,13 +1898,29 @@ def _run_validated_test_command(
     repo_root: str,
     timeout_seconds: float,
     command_runner: TestCommandRunner | None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    sandbox_audit: list[dict[str, Any]] = []
     if command_runner is None:
-        return run_test_command(command, repo_root=repo_root, timeout_seconds=timeout_seconds)
+        test_result = run_test_command(
+            command,
+            repo_root=repo_root,
+            timeout_seconds=timeout_seconds,
+            sandbox_audit=sandbox_audit,
+        )
+        return test_result, sandbox_audit
 
-    validate_test_command(command)
+    argv = validate_test_command(command)
     resolve_command_cwd(command.get("cwd", "."), repo_root=repo_root)
-    return command_runner(command, repo_root, timeout_seconds)
+    config = default_sandbox_config(repo_root, cwd=command.get("cwd", "."), timeout_seconds=timeout_seconds)
+    session = create_sandbox_session(config, audit=sandbox_audit)
+    test_result = command_runner(command, repo_root, timeout_seconds)
+    test_result.setdefault("argv", argv)
+    test_result.setdefault("command", " ".join(argv))
+    test_result["sandbox"] = sandbox_result_metadata(
+        session,
+        command_allowlist=[["pytest"], ["python", "-m", "pytest"]],
+    )
+    return test_result, sandbox_audit
 
 
 def _patch_metadata(patch: dict | None) -> dict[str, object]:

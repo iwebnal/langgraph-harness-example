@@ -6,11 +6,11 @@
 
 ## Current Phase
 
-Current phase: Phase 14 — Git boundaries
+Current phase: Phase 16 — Sandbox execution
 
 Status: Completed
 
-Last updated: 2026-09-15
+Last updated: 2026-09-16
 
 ## Baseline
 
@@ -186,6 +186,33 @@ Phase 14 добавил read-only Git boundaries and local diff awareness:
 - records `git_read` and `git_denied` audit events;
 - preserves patch/test/repair behavior and adds no Git writes, GitHub integration, PR creation, sandbox or deployment capability.
 
+Phase 15 добавил limited GitHub boundaries:
+
+- defines deterministic GitHub boundary in `src/release_triage_agent/github_boundary.py`;
+- supports schema-validated issue context, PR context, metadata summaries and prepared-only draft comment/status summaries;
+- treats all GitHub body/title/metadata as untrusted data and never as executable instructions;
+- redacts token/password/secret/API-key-like inline values from GitHub context text;
+- defines a narrow read-only client protocol for approved clients/fakes and performs no real GitHub API/network calls;
+- prepares draft comments/status summaries only as structured text objects and never sends them;
+- denies GitHub write operations such as post comment, create/update/approve/merge PR, close issue, edit labels/milestones/assignees, trigger workflow/deployment, push branch and release/tag creation;
+- stores GitHub draft data in `AgentState.github_draft` and `review_status.github_draft` during final review when valid GitHub context is present;
+- records `github_context_read`, `github_draft_prepared` and `github_write_denied` audit events;
+- preserves release triage behavior, Phase 14 read-only Git boundaries and adds no GitHub writes, PR creation, merge, deployment, sandbox or network capability.
+
+Phase 16 добавил deterministic sandbox execution boundaries:
+
+- defines structured sandbox config/session/result schemas in `AgentState`;
+- adds a deterministic local constrained sandbox boundary in `src/release_triage_agent/sandbox.py`;
+- enforces repository root and cwd boundaries before command execution;
+- validates explicit writable path limits and denies protected files, `harness/audit/`, `.env`, secrets paths and paths outside the repository root;
+- defaults network policy to `off` and allows only `off` or `restricted`;
+- models secrets isolation through a minimal subprocess environment and explicit sandbox metadata;
+- represents resource limits for timeout, max output bytes, max process count and max writable paths;
+- integrates sandbox metadata/audit into the existing Phase 8 `pytest` / `python -m pytest` command path without broadening the command allowlist;
+- stores sandbox metadata in test results and final review status;
+- records `sandbox_policy_checked`, `sandbox_session_created` and `sandbox_request_denied` audit events;
+- preserves Phase 14 Git read-only boundaries, Phase 15 GitHub draft-only boundaries and adds no Git/GitHub/deployment write capability.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -203,8 +230,8 @@ Phase 14 добавил read-only Git boundaries and local diff awareness:
 - [x] Phase 12 — Checkpointing and durable audit
 - [x] Phase 13 — Human-in-the-loop
 - [x] Phase 14 — Git boundaries
-- [ ] Phase 15 — GitHub boundaries
-- [ ] Phase 16 — Sandbox execution
+- [x] Phase 15 — GitHub boundaries
+- [x] Phase 16 — Sandbox execution
 - [ ] Phase 17 — Expanded tooling
 - [ ] Phase 18 — Observability
 - [ ] Phase 19 — Production hardening
@@ -275,6 +302,15 @@ Phase 14 добавил read-only Git boundaries and local diff awareness:
 - Final diff review now includes read-only Git context and dirty worktree/local diff awareness when `repo_context.repo_root` is a Git repository.
 - Added focused Git boundary tests in `tests/test_git_boundary.py`.
 - Added final review tests for dirty worktree and local diff awareness in `tests/test_diff_review.py`.
+- Phase 15 GitHub boundary support added in `src/release_triage_agent/github_boundary.py`.
+- Extended `AgentState` with GitHub issue/PR context and draft summary schemas.
+- Final diff review can now include prepared-only GitHub draft comment/status summary when valid GitHub context is supplied.
+- Added focused GitHub boundary tests in `tests/test_github_boundary.py`.
+- Added final review tests for GitHub draft summary integration in `tests/test_diff_review.py`.
+- Phase 16 local constrained sandbox boundary support added in `src/release_triage_agent/sandbox.py`.
+- Extended `AgentState` with sandbox config/session/result schemas and sandbox metadata in `TestResult` / `ReviewSummary`.
+- Test command execution now creates sandbox sessions, uses repository-scoped cwd validation, records sandbox audit events and stores sandbox metadata without expanding allowed commands.
+- Added focused sandbox boundary tests in `tests/test_sandbox.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -314,15 +350,23 @@ Baseline result before Phase 14: 120 passed.
 
 Final result after Phase 14: 132 passed.
 
+Baseline result before Phase 15: 132 passed.
+
+Final result after Phase 15: 142 passed.
+
+Baseline result before Phase 16: 142 passed.
+
+Final result after Phase 16: 155 passed.
+
 ## Current Work
 
-Phase 14 завершена. Read-only Git context is available through a safe wrapper and final review can surface current branch, status summary, changed/untracked files, local diff summary and dirty worktree warnings without enabling Git writes.
+Phase 16 завершена. Test execution now runs through a deterministic local constrained sandbox boundary contract with repository-scoped cwd validation, restricted/off-by-default network metadata, secrets isolation rules, resource limits and audit.
 
 ## Next Actions
 
-1. Начать Phase 15: GitHub boundaries.
-2. Add limited GitHub awareness for read PR/issue context and draft status/comment data only.
-3. Keep GitHub writes, merge, deployment triggers, sandbox and production access unavailable unless later phases explicitly add gated capabilities.
+1. Начать Phase 17: Expanded tooling.
+2. Add any new tool boundary only through explicit deterministic allowlists and sandbox validation.
+3. Keep Git/GitHub writes, deployment triggers, unrestricted network and arbitrary shell unavailable unless a later phase explicitly designs and approves them.
 
 ## Known Issues
 
@@ -330,7 +374,7 @@ Phase 14 завершена. Read-only Git context is available through a safe w
 - Patch validation exists, but no controlled patch application step has been enabled yet.
 - Command allowlist runner exists only for `pytest` and `python -m pytest`; no lint/typecheck/package commands are allowed yet.
 - Git boundaries are read-only only; no commit, checkout, branch creation, reset, clean, tag, push or merge capability exists.
-- Нет GitHub boundaries.
+- GitHub boundaries are read/draft-only only; no API/network client, comment posting, PR creation/update/approval/merge, issue closing, label editing, workflow/deployment trigger, branch push or release/tag creation exists.
 - Structured diagnosis currently depends on deterministic heuristic relevant-file selection from Phase 3.
 - Phase 4 uses fake/mocked LLMs in tests; no real LLM API integration is configured.
 - Phase 5 uses fake/mocked planners in tests; no real planner/LLM API integration is configured.
@@ -344,6 +388,10 @@ Phase 14 завершена. Read-only Git context is available through a safe w
 - Human approvals are accepted from structured state only; there is no external approval ticket system or LangGraph interrupt UI yet.
 - Protected/policy-related ChangePlans now stop for approval, but controlled apply remains unavailable, so approval does not implement or imply filesystem mutation.
 - Final review treats Git context as read-only summary data; if a repository root is not a Git repository, Git context is unavailable and the workflow continues with an audited limitation.
+- GitHub context must be supplied through structured state or an approved/fake read-only client protocol; there is no real GitHub connector or network integration.
+- GitHub draft summaries are prepared-only artifacts and must be manually reviewed; they are never posted.
+- Sandbox execution is an MVP local constrained boundary/contract, not a Docker/Kubernetes/cloud isolation layer.
+- Sandbox filesystem write restrictions are deterministically validated by the harness contract; no controlled apply or broad filesystem mutation capability is enabled.
 
 ## Decisions
 
@@ -382,6 +430,13 @@ Phase 14 завершена. Read-only Git context is available through a safe w
 - Git commands run via structured argv and `shell=False`; the wrapper executes `/usr/bin/git` while preserving public logical argv as `git`.
 - Dirty worktree detection is informational in Phase 14 and is surfaced in review as a warning to prevent overwriting unrelated user changes; it does not apply, revert or mutate files.
 - Git failures in final review do not fabricate Git context; they are recorded as `git_denied` audit events and shown as known limitations.
+- Phase 15 treats all GitHub content as untrusted input. It may be summarized or included as data after schema validation/redaction, but it is never followed as instructions.
+- GitHub writes are represented only by denied boundary behavior and audit events; no sending/posting/updating method is exposed.
+- GitHub draft preparation is deterministic and state-based; no LLM, network, credential lookup or connector call is used.
+- Phase 16 uses a local constrained sandbox contract rather than Docker/Kubernetes to keep the MVP portable and avoid adding host-level infrastructure requirements.
+- Sandbox network defaults to `off`; `restricted` is represented as a contract value, while unrestricted network is denied.
+- Sandbox sessions are attached to already-allowlisted command execution only; they do not introduce new commands, arbitrary shell, Git writes, GitHub writes or deployment triggers.
+- Test subprocesses receive a minimal environment with repo-local `HOME` and no copied credential/secrets environment.
 
 ## Baseline Test Command
 

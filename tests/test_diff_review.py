@@ -173,7 +173,15 @@ def fake_test_result(status, exit_code=1, summary=None):
     return result
 
 
-def run_review_graph(tmp_path, *, test_results, repair_patches=None, final_review_approved=True, git_dirty=False):
+def run_review_graph(
+    tmp_path,
+    *,
+    test_results,
+    repair_patches=None,
+    final_review_approved=True,
+    git_dirty=False,
+    github_context=None,
+):
     make_repo(tmp_path)
     init_git_repo(tmp_path)
     if git_dirty:
@@ -207,6 +215,7 @@ def run_review_graph(tmp_path, *, test_results, repair_patches=None, final_revie
             "request": request,
             "repo_context": {"repo_root": str(tmp_path)},
             "approval_decisions": approval_decisions,
+            **({"github_context": github_context} if github_context else {}),
         }
     )
 
@@ -313,6 +322,37 @@ def test_final_review_includes_dirty_worktree_and_local_diff_awareness(tmp_path)
     assert "Dirty Git worktree detected" in " ".join(result["review_status"]["known_limitations"])
     event_types = [event["event_type"] for event in result["audit"] if isinstance(event, dict)]
     assert "git_read" in event_types
+
+
+def test_final_review_can_include_github_draft_summary(tmp_path):
+    github_context = {
+        "kind": "pull_request",
+        "number": 7,
+        "title": "Update policy route",
+        "body_text": "Please review this change.",
+        "author": "octocat",
+        "state": "open",
+        "base_branch": "main",
+        "head_branch": "feature/policy-route",
+        "labels": ["safe-change"],
+        "changed_files": ["src/feature.py"],
+        "untrusted": True,
+    }
+
+    result = run_review_graph(
+        tmp_path,
+        test_results=[fake_test_result("passed", exit_code=0)],
+        github_context=github_context,
+    )
+
+    draft = result["review_status"]["github_draft"]
+    assert draft["prepared_only"] is True
+    assert draft["target_kind"] == "pull_request"
+    assert "Changed files: src/feature.py" in draft["text"]
+    assert "Tests run: pytest" in draft["text"]
+    assert "Risks: Small source change." in draft["text"]
+    event_types = [event["event_type"] for event in result["audit"] if isinstance(event, dict)]
+    assert "github_draft_prepared" in event_types
 
 
 def test_final_review_gate_produces_ready_for_human_review_without_unsafe_actions(tmp_path):

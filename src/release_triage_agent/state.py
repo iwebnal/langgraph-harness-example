@@ -33,6 +33,7 @@ ApprovalScope = Literal[
     "policy_change",
 ]
 ApprovalDecisionStatus = Literal["approved", "rejected", "pending", "expired"]
+SandboxNetworkPolicy = Literal["off", "restricted"]
 TestStatus = Literal["not_run", "passed", "failed", "error"]
 PatchStatus = Literal["proposed", "validated", "applied", "rejected"]
 AuditActor = Literal["user", "agent", "llm", "harness", "tool", "human"]
@@ -117,6 +118,47 @@ class Patch(TypedDict):
     summary: NotRequired[str]
 
 
+class SandboxConfig(TypedDict):
+    repo_root: str
+    cwd: str
+    network: SandboxNetworkPolicy
+    timeout_seconds: float
+    max_output_bytes: int
+    max_processes: int
+    max_writable_paths: int
+    writable_paths: list[str]
+    protected_paths: list[str]
+    secrets_paths: list[str]
+
+
+class SandboxSession(TypedDict):
+    session_id: str
+    repo_root: str
+    cwd: str
+    network: SandboxNetworkPolicy
+    timeout_seconds: float
+    max_output_bytes: int
+    max_processes: int
+    writable_paths: list[str]
+    local_constrained: bool
+    secrets_isolated: bool
+    git_writes_allowed: bool
+    github_writes_allowed: bool
+    deployment_allowed: bool
+
+
+class SandboxResult(TypedDict):
+    session_id: str
+    cwd: str
+    network: SandboxNetworkPolicy
+    timeout_seconds: float
+    max_output_bytes: int
+    max_processes: int
+    command_allowlist: list[list[str]]
+    local_constrained: bool
+    secrets_isolated: bool
+
+
 class TestResult(TypedDict):
     command: str
     argv: NotRequired[list[str]]
@@ -128,6 +170,7 @@ class TestResult(TypedDict):
     stdout_excerpt: NotRequired[str]
     stderr_excerpt: NotRequired[str]
     cwd: NotRequired[str]
+    sandbox: NotRequired[SandboxResult]
 
 
 class GitContext(TypedDict):
@@ -138,6 +181,57 @@ class GitContext(TypedDict):
     untracked_files: list[str]
     dirty: bool
     status_entries: list[GitStatusEntry]
+
+
+class GitHubMetadataSummary(TypedDict):
+    kind: Literal["issue", "pull_request"]
+    number: int
+    title: str
+    author: str
+    state: str
+    url: NotRequired[str]
+    labels: NotRequired[list[str]]
+    untrusted: bool
+
+
+class GitHubIssueContext(TypedDict):
+    kind: Literal["issue"]
+    number: int
+    title: str
+    body_text: str
+    author: str
+    state: str
+    url: NotRequired[str]
+    labels: NotRequired[list[str]]
+    untrusted: bool
+
+
+class GitHubPRContext(TypedDict):
+    kind: Literal["pull_request"]
+    number: int
+    title: str
+    body_text: str
+    author: str
+    state: str
+    base_branch: str
+    head_branch: str
+    url: NotRequired[str]
+    labels: NotRequired[list[str]]
+    changed_files: NotRequired[list[str]]
+    untrusted: bool
+
+
+GitHubContext = GitHubIssueContext | GitHubPRContext
+
+
+class GitHubDraft(TypedDict):
+    kind: Literal["comment", "status_summary"]
+    target_kind: Literal["issue", "pull_request"]
+    target_number: int
+    text: str
+    status_summary: str
+    prepared_only: bool
+    untrusted_source: bool
 
 
 class RepairAttempt(TypedDict):
@@ -164,6 +258,8 @@ class ReviewSummary(TypedDict):
     latest_test_result: NotRequired[TestResult]
     repair_attempts_used: NotRequired[int]
     git: NotRequired[GitContext]
+    github_draft: NotRequired[GitHubDraft]
+    sandbox: NotRequired[SandboxResult]
     risks: NotRequired[list[str]]
     assumptions: NotRequired[list[str]]
     known_limitations: NotRequired[list[str]]
@@ -238,5 +334,9 @@ class AgentState(TypedDict):
     review_status: NotRequired[ReviewSummary]
     approval_requests: NotRequired[list[ApprovalRequest]]
     approval_decisions: NotRequired[list[ApprovalDecision]]
+    github_context: NotRequired[GitHubContext]
+    github_draft: NotRequired[GitHubDraft]
+    sandbox_config: NotRequired[SandboxConfig]
+    sandbox_session: NotRequired[SandboxSession]
     run_id: NotRequired[str]
     checkpoint: NotRequired[CheckpointMetadata]

@@ -6,6 +6,13 @@ import time
 from pathlib import Path, PurePath
 from typing import Any
 
+from .sandbox import (
+    SandboxBoundaryError,
+    create_sandbox_session,
+    default_sandbox_config,
+    sandbox_environment,
+    sandbox_result_metadata,
+)
 from .state import TestResult
 
 
@@ -41,20 +48,41 @@ def run_test_command(
     *,
     repo_root: str,
     timeout_seconds: float = DEFAULT_TEST_TIMEOUT_SECONDS,
+    sandbox_config: dict[str, Any] | None = None,
+    sandbox_audit: list[dict[str, Any]] | None = None,
 ) -> TestResult:
     argv = validate_test_command(command)
     cwd = resolve_command_cwd(command.get("cwd", "."), repo_root=repo_root)
+    config = sandbox_config or default_sandbox_config(
+        repo_root,
+        cwd=command.get("cwd", "."),
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=MAX_OUTPUT_EXCERPT_CHARS,
+    )
+    try:
+        session = create_sandbox_session(config, audit=sandbox_audit)
+    except SandboxBoundaryError as exc:
+        raise CommandValidationError(str(exc)) from exc
+    if Path(session["cwd"]) != cwd:
+        raise CommandValidationError("test command cwd does not match sandbox cwd")
+    effective_timeout = min(float(timeout_seconds), session["timeout_seconds"])
+    output_limit = min(MAX_OUTPUT_EXCERPT_CHARS, session["max_output_bytes"])
+    sandbox_metadata = sandbox_result_metadata(
+        session,
+        command_allowlist=[list(item) for item in ALLOWED_TEST_COMMANDS],
+    )
 
     started = time.monotonic()
     try:
         completed = subprocess.run(
             _executable_argv(argv),
             cwd=str(cwd),
+            env=sandbox_environment(session),
             shell=False,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=timeout_seconds,
+            timeout=effective_timeout,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
@@ -66,11 +94,12 @@ def run_test_command(
             "argv": argv,
             "status": "error",
             "duration_seconds": round(duration, 3),
-            "summary": f"Test command timed out after {timeout_seconds} second(s).",
-            "output_excerpt": _combined_excerpt(stdout, stderr),
-            "stdout_excerpt": _excerpt(stdout),
-            "stderr_excerpt": _excerpt(stderr),
+            "summary": f"Test command timed out after {effective_timeout} second(s).",
+            "output_excerpt": _combined_excerpt(stdout, stderr, limit=output_limit),
+            "stdout_excerpt": _excerpt(stdout, limit=output_limit),
+            "stderr_excerpt": _excerpt(stderr, limit=output_limit),
             "cwd": str(cwd),
+            "sandbox": sandbox_metadata,
         }
     except OSError as exc:
         duration = time.monotonic() - started
@@ -82,10 +111,10 @@ def run_test_command(
             "summary": f"Test command failed to start: {exc}",
             "output_excerpt": "",
             "stdout_excerpt": "",
-            "stderr_excerpt": _excerpt(str(exc)),
+            "stderr_excerpt": _excerpt(str(exc), limit=output_limit),
             "cwd": str(cwd),
+            "sandbox": sandbox_metadata,
         }
-
     duration = time.monotonic() - started
     status = "passed" if completed.returncode == 0 else "failed"
     return {
@@ -95,10 +124,11 @@ def run_test_command(
         "exit_code": completed.returncode,
         "duration_seconds": round(duration, 3),
         "summary": _summary(argv, completed.returncode),
-        "output_excerpt": _combined_excerpt(completed.stdout, completed.stderr),
-        "stdout_excerpt": _excerpt(completed.stdout),
-        "stderr_excerpt": _excerpt(completed.stderr),
+        "output_excerpt": _combined_excerpt(completed.stdout, completed.stderr, limit=output_limit),
+        "stdout_excerpt": _excerpt(completed.stdout, limit=output_limit),
+        "stderr_excerpt": _excerpt(completed.stderr, limit=output_limit),
         "cwd": str(cwd),
+        "sandbox": sandbox_metadata,
     }
 
 
@@ -157,20 +187,20 @@ def _summary(argv: list[str], exit_code: int) -> str:
     return f"Test command {' '.join(argv)} {status} with exit code {exit_code}."
 
 
-def _combined_excerpt(stdout: str, stderr: str) -> str:
+def _combined_excerpt(stdout: str, stderr: str, *, limit: int = MAX_OUTPUT_EXCERPT_CHARS) -> str:
     combined = ""
     if stdout:
         combined += f"stdout:\n{stdout}"
     if stderr:
         separator = "\n" if combined else ""
         combined += f"{separator}stderr:\n{stderr}"
-    return _excerpt(combined)
+    return _excerpt(combined, limit=limit)
 
 
-def _excerpt(text: str) -> str:
-    if len(text) <= MAX_OUTPUT_EXCERPT_CHARS:
+def _excerpt(text: str, *, limit: int = MAX_OUTPUT_EXCERPT_CHARS) -> str:
+    if len(text) <= limit:
         return text
-    return text[:MAX_OUTPUT_EXCERPT_CHARS] + "\n[output truncated]"
+    return text[:limit] + "\n[output truncated]"
 
 
 def _coerce_output(output: str | bytes | None) -> str:
