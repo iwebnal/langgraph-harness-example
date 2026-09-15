@@ -32,6 +32,43 @@ def make_repo(tmp_path):
     write_text(tmp_path / "pyproject.toml", "[project]\nname = 'demo'\n")
     write_text(tmp_path / "src" / "feature.py", "def policy_route():\n    return 'ok'\n")
     write_text(tmp_path / "tests" / "test_feature.py", "def test_policy_route():\n    assert True\n")
+    write_text(
+        tmp_path / "harness" / "policy.yaml",
+        """version: 1
+harness_policy:
+  filesystem:
+    allowed_change_prefixes:
+      - src/
+      - tests/
+      - docs/
+    denied_change_prefixes:
+      - .git/
+      - .github/workflows/
+      - venv/
+      - .venv/
+      - __pycache__/
+      - secrets/
+      - harness/audit/
+    protected_files:
+      - .env
+      - harness/policy.yaml
+    protected_suffixes:
+      - .pem
+      - .key
+  changes:
+    max_changed_files: 5
+    max_patch_lines: 300
+    max_patch_size_bytes: 100000
+  approvals:
+    require_for_risk_markers:
+      - approval
+      - auth
+      - deployment
+      - high
+      - migration
+      - production
+""",
+    )
 
 
 def valid_diagnosis():
@@ -127,7 +164,6 @@ def test_change_plan_graph_blocks_missing_required_field(tmp_path):
 
 def test_change_plan_graph_saves_policy_precheck_failure(tmp_path):
     make_repo(tmp_path)
-    write_text(tmp_path / "harness" / "policy.yaml", "version: 1\nrules:\n  - id: policy\n")
     diagnosis = valid_diagnosis()
     diagnosis["affected_files"] = ["harness/policy.yaml"]
     output = valid_plan()

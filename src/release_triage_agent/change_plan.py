@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import PurePath
 from typing import Any, Protocol
 
+from .harness_policy import check_change_plan_policy, default_policy_config
 from .state import ChangePlan, Diagnosis, PolicyResult, RepoContext, Task
 
 
@@ -15,20 +16,6 @@ REQUIRED_CHANGE_PLAN_FIELDS = (
     "tests_to_run",
     "rollback_notes",
 )
-PROTECTED_CHANGE_PATHS = frozenset(
-    {
-        ".env",
-        "harness/policy.yaml",
-    }
-)
-PROTECTED_CHANGE_PREFIXES = (
-    ".git/",
-    ".github/workflows/",
-    "harness/audit/",
-)
-MAX_PLANNED_CHANGED_FILES = 5
-
-
 class ChangePlanner(Protocol):
     """Bounded structured-output interface for candidate ChangePlans."""
 
@@ -101,39 +88,7 @@ def validate_change_plan_output(
 
 
 def precheck_change_plan_policy(plan: ChangePlan) -> PolicyResult:
-    violations = []
-
-    if len(plan["files_to_change"]) > MAX_PLANNED_CHANGED_FILES:
-        violations.append(
-            {
-                "rule_id": "max-planned-files",
-                "message": "ChangePlan exceeds max planned changed files.",
-                "severity": "error",
-            }
-        )
-
-    for path in plan["files_to_change"]:
-        if path in PROTECTED_CHANGE_PATHS or any(path.startswith(prefix) for prefix in PROTECTED_CHANGE_PREFIXES):
-            violations.append(
-                {
-                    "rule_id": "protected-file",
-                    "message": f"ChangePlan targets protected path: {path}",
-                    "severity": "error",
-                }
-            )
-
-    requires_approval = bool(plan.get("approval_requirements")) or any(
-        "approval" in risk.lower() or "high" in risk.lower()
-        for risk in plan["policy_risks"]
-    )
-
-    return {
-        "allowed": not violations,
-        "stage": "plan",
-        "violations": violations,
-        "requires_approval": requires_approval,
-        "checked_rules": ["max-planned-files", "protected-file", "approval-signal"],
-    }
+    return check_change_plan_policy(plan, config=default_policy_config())
 
 
 def _validate_non_empty_string(output: dict[str, Any], field: str) -> str:

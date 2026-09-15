@@ -7,10 +7,10 @@ from langgraph.graph import END, START, StateGraph
 from .change_plan import (
     ChangePlanner,
     ChangePlanValidationError,
-    precheck_change_plan_policy,
     validate_change_plan_output,
 )
 from .diagnosis import DiagnosisLLM, DiagnosisValidationError, validate_diagnosis_output
+from .harness_policy import check_change_plan_policy
 from .repository import ReadOnlyRepositoryTools, RepositoryAccessError
 from .state import AgentState, AuditEntry
 
@@ -273,7 +273,10 @@ def propose_change_plan(state: AgentState, planner: ChangePlanner) -> AgentState
             target="change_plan",
         )
 
-    policy_result = precheck_change_plan_policy(change_plan)
+    policy_result = check_change_plan_policy(
+        change_plan,
+        policy_path=Path(state["repo_context"]["repo_root"]) / "harness" / "policy.yaml",
+    )
     audit = append_structured_audit(
         state,
         {
@@ -292,7 +295,11 @@ def propose_change_plan(state: AgentState, planner: ChangePlanner) -> AgentState
             "message": "ChangePlan policy pre-check completed.",
             "target": "change_plan",
             "decision": "allowed" if policy_result["allowed"] else "denied",
-            "reason": "Phase 5 policy pre-check contract; no full policy engine or patching.",
+            "reason": (
+                "Phase 6 harness policy engine completed. "
+                f"Checked rules: {', '.join(policy_result.get('checked_rules', []))}. "
+                f"Violations: {len(policy_result['violations'])}."
+            ),
         }
     )
 

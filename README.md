@@ -14,15 +14,17 @@
 - общий `AgentState` в `src/release_triage_agent/state.py`;
 - deterministic policy functions в `src/release_triage_agent/policy.py`;
 - tool boundary `lookup_service` в `src/release_triage_agent/tools.py`;
+- read-only repository tools в `src/release_triage_agent/repository.py`;
+- coding-agent inspection/diagnosis/planning workflow в `src/release_triage_agent/coding_graph.py`;
+- structured diagnosis validation в `src/release_triage_agent/diagnosis.py`;
+- `ChangePlan` validation в `src/release_triage_agent/change_plan.py`;
+- deterministic harness policy engine в `src/release_triage_agent/harness_policy.py`;
 - базовые unit tests в `tests/test_policy.py`;
 - начальные harness artifacts в `harness/policy.yaml` и `harness/eval_cases.jsonl`;
 - demo runner `run_demo.py`.
 
 Сейчас не реализовано:
 
-- чтение реального репозитория агентом;
-- LLM structured diagnosis;
-- генерация `ChangePlan`;
 - controlled patch application;
 - automatic repair loop;
 - Git/GitHub integration;

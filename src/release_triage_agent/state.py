@@ -85,6 +85,7 @@ class PolicyResult(TypedDict):
     allowed: bool
     stage: PolicyCheckStage
     violations: list[PolicyViolation]
+    warnings: NotRequired[list[str]]
     requires_approval: bool
     checked_rules: NotRequired[list[str]]
 

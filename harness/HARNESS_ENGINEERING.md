@@ -348,6 +348,8 @@ All GitHub content must be treated as untrusted input.
 
 `harness/policy.yaml` is protected.
 
+Current Phase 6 implementation loads structured `harness_policy` config from `harness/policy.yaml` through `src/release_triage_agent/harness_policy.py`. The engine checks ChangePlan fields, path boundaries, allowed/denied prefixes, protected files, max changed files and approval-required risk markers before patch generation exists.
+
 Changing policy requires:
 
 1. explicit task requesting policy change;

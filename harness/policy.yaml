@@ -1,4 +1,36 @@
 version: 1
+harness_policy:
+  filesystem:
+    allowed_change_prefixes:
+      - src/
+      - tests/
+      - docs/
+    denied_change_prefixes:
+      - .git/
+      - .github/workflows/
+      - venv/
+      - .venv/
+      - __pycache__/
+      - secrets/
+      - harness/audit/
+    protected_files:
+      - .env
+      - harness/policy.yaml
+    protected_suffixes:
+      - .pem
+      - .key
+  changes:
+    max_changed_files: 5
+    max_patch_lines: 300
+    max_patch_size_bytes: 100000
+  approvals:
+    require_for_risk_markers:
+      - approval
+      - auth
+      - deployment
+      - high
+      - migration
+      - production
 rules:
   - id: high-risk-needs-approval
     description: High-risk changes must not produce an execution plan unless approval is present.
