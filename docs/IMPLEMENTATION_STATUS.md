@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 9 — Repair loop
+Current phase: Phase 10 — Diff review state
 
 Status: Completed
 
@@ -129,6 +129,16 @@ Phase 9 добавил bounded repair loop:
 - fails closed on invalid repair output, policy denial, invalid repair patch or denied command;
 - does not implement Phase 10 diff review improvements, Git/GitHub integration, sandbox or deployment.
 
+Phase 10 добавил deterministic final diff review state:
+
+- extends `ReviewSummary` with original task, diagnosis summary, ChangePlan summary, patch metadata, tests run, latest test result, repair attempts used, risks, assumptions, known limitations, stopped reason and final status;
+- adds `diff_review` node to aggregate existing Phase 7 patch metadata, Phase 8 test results and Phase 9 repair attempts without LLM-only decisions;
+- adds `build_coding_diff_review_graph` that routes successful and failed-after-repair-limit workflows into final review;
+- preserves failed test summaries after repair limit instead of hiding them;
+- handles no-patch/no-change states explicitly;
+- records `diff_review` and `ready_for_human_review` audit events;
+- performs no patch application, extra commands, Git/GitHub, sandbox, deployment or production actions.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -141,7 +151,7 @@ Phase 9 добавил bounded repair loop:
 - [x] Phase 7 — Controlled unified diff patch
 - [x] Phase 8 — Test execution
 - [x] Phase 9 — Repair loop
-- [ ] Phase 10 — Diff review state
+- [x] Phase 10 — Diff review state
 - [ ] Phase 11 — MVP evals
 - [ ] Phase 12 — Checkpointing and durable audit
 - [ ] Phase 13 — Human-in-the-loop
@@ -196,6 +206,9 @@ Phase 9 добавил bounded repair loop:
 - Added bounded repair loop workflow support in `src/release_triage_agent/coding_graph.py`.
 - Extended `RepairAttempt` state metadata with a repair attempt status.
 - Added fake planner/generator/runner repair graph tests in `tests/test_coding_repair_graph.py`.
+- Phase 10 final diff review aggregation added in `src/release_triage_agent/coding_graph.py`.
+- Extended `ReviewSummary` state metadata in `src/release_triage_agent/state.py`.
+- Added focused diff review tests in `tests/test_diff_review.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -215,17 +228,21 @@ Baseline result before Phase 9: 70 passed.
 
 Final result after Phase 9: 79 passed.
 
+Baseline result before Phase 10: 79 passed.
+
+Final result after Phase 10: 87 passed.
+
 ## Current Work
 
-Phase 9 завершена. Repair loop запускается только после failed/error test result from the allowlisted runner and reuses the same ChangePlan policy, patch validation/policy and test command controls for each repair attempt, with a deterministic max of 2 attempts.
+Phase 10 завершена. Final diff review is deterministic aggregation over task, diagnosis, ChangePlan, patch metadata, tests and repair attempts; successful and failed-after-repair-limit workflows end in `ready_for_human_review` with explicit final status and limitations.
 
 ## Next Actions
 
-1. Начать Phase 10: Diff review state.
-2. Build final review summary from diagnosis, ChangePlan, patch metadata, repair attempts and test results.
-3. Ensure successful and failed-after-repair runs both end with clear `ready_for_human_review` state.
-4. Include changed files, tests run, risks, assumptions and known limitations in reviewer-facing state.
-5. Не добавлять Git/GitHub integration, sandbox или deployment до соответствующих фаз.
+1. Начать Phase 11: MVP evals.
+2. Expand `harness/eval_cases.jsonl` with safe task, blocked task, protected file, failing tests and repair limit cases.
+3. Add a deterministic local eval runner or tests that verify expected safe/blocked routes.
+4. Document expected eval outputs and failure signals.
+5. Не добавлять checkpointing, Git/GitHub integration, sandbox или deployment до соответствующих фаз.
 
 ## Known Issues
 
@@ -240,7 +257,7 @@ Phase 9 завершена. Repair loop запускается только по
 - Phase 6 policy parser intentionally supports only the minimal YAML subset used by `harness/policy.yaml`; replacing it with a full YAML dependency is a later decision.
 - Phase 8 runs tests against the current working tree after patch validation; a controlled apply step is still not enabled in this architecture.
 - Repair loop exists, but because controlled patch application is not enabled yet, tests still run against the current working tree rather than applied candidate diffs.
-- Final diff review remains basic until Phase 10.
+- Final diff review is deterministic and state-based; richer human review formatting can be improved later without changing enforcement boundaries.
 
 ## Decisions
 
@@ -262,6 +279,8 @@ Phase 9 завершена. Repair loop запускается только по
 - `pytest` is executed via the active Python interpreter as `sys.executable -m pytest` while preserving logical command metadata as `pytest`, avoiding PATH-dependent behavior without introducing shell execution.
 - Phase 9 uses a separate `RepairPlanner` protocol so repair diagnosis/planning remains a bounded structured-output step with no filesystem, shell, Git, GitHub, network, sandbox or deployment capability.
 - Repair attempts update top-level `change_plan`, `policy_result`, `patch_policy_result`, `patch` and append `test_results`, while preserving each attempt snapshot under `repair_attempts`.
+- Phase 10 keeps final review deterministic and state-based; no LLM is used to decide final status.
+- `diff_review` appends review audit events and does not mutate patch, run commands or perform repository writes.
 
 ## Baseline Test Command
 

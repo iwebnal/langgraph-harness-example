@@ -937,6 +937,68 @@ def perform_repair_attempt(
     }
 
 
+def diff_review(state: AgentState) -> AgentState:
+    latest_test_result = state.get("test_results", [])[-1] if state.get("test_results") else None
+    patch = state.get("patch")
+    diagnosis = state.get("diagnosis", {})
+    change_plan = state.get("change_plan", {})
+    repair_attempts = state.get("repair_attempts", [])
+    blocked_reason = _latest_blocked_reason(state)
+
+    changed_files = patch.get("target_files", []) if patch else []
+    tests_run = [result["command"] for result in state.get("test_results", [])]
+    known_limitations = _review_known_limitations(state, latest_test_result, blocked_reason)
+    final_status = _review_final_status(state, latest_test_result, blocked_reason)
+
+    review_status = {
+        "status": "ready_for_human_review",
+        "final_status": final_status,
+        "original_task": state.get("task", {}).get("raw_request", state.get("request", "")),
+        "diagnosis_summary": diagnosis.get("problem", "No structured diagnosis available."),
+        "change_plan_summary": change_plan.get("summary", "No ChangePlan available."),
+        "diff_summary": _review_diff_summary(patch, latest_test_result, repair_attempts, blocked_reason),
+        "changed_files": changed_files,
+        "patch_metadata": _patch_metadata(patch),
+        "tests_run": tests_run,
+        "repair_attempts_used": len(repair_attempts),
+        "risks": diagnosis.get("risks", []) or change_plan.get("policy_risks", []),
+        "assumptions": diagnosis.get("assumptions", []),
+        "known_limitations": known_limitations,
+    }
+    if latest_test_result:
+        review_status["latest_test_result"] = latest_test_result
+    if blocked_reason:
+        review_status["stopped_reason"] = blocked_reason
+
+    audit = append_structured_audit(
+        state,
+        {
+            "event_type": "diff_review",
+            "actor": "agent",
+            "message": "Final diff review summary prepared.",
+            "target": "review_status",
+            "decision": "allowed",
+            "reason": "Deterministic aggregation completed without applying changes or running commands.",
+        },
+    )
+    audit.append(
+        {
+            "event_type": "ready_for_human_review",
+            "actor": "agent",
+            "message": "Workflow is ready for human review.",
+            "target": "review_status",
+            "decision": final_status,
+            "reason": "; ".join(known_limitations) if known_limitations else "Review summary prepared.",
+        }
+    )
+
+    return {
+        "workflow_stage": "ready_for_human_review",
+        "review_status": review_status,
+        "audit": audit,
+    }
+
+
 def inspection_route(state: AgentState) -> str:
     if state.get("workflow_stage") == "blocked":
         return "blocked"
@@ -1291,6 +1353,115 @@ def build_coding_repair_graph(
     return builder.compile()
 
 
+def build_coding_diff_review_graph(
+    llm: DiagnosisLLM,
+    planner: ChangePlanner,
+    patch_generator: PatchGenerator,
+    repair_planner: RepairPlanner,
+    repair_patch_generator: PatchGenerator,
+    *,
+    test_command: dict | None = None,
+    timeout_seconds: float = 30,
+    command_runner: TestCommandRunner | None = None,
+):
+    builder = StateGraph(AgentState)
+    builder.add_node("intake_task", intake_task)
+    builder.add_node("inspect_repository", inspect_repository)
+    builder.add_node("select_relevant_files", select_relevant_files)
+    builder.add_node("summarize_project_context", summarize_project_context)
+    builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
+    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner))
+    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator))
+    builder.add_node(
+        "run_tests",
+        lambda state: run_tests(
+            state,
+            command=test_command,
+            timeout_seconds=timeout_seconds,
+            command_runner=command_runner,
+        ),
+    )
+    builder.add_node(
+        "perform_repair_attempt",
+        lambda state: perform_repair_attempt(
+            state,
+            repair_planner,
+            repair_patch_generator,
+            command=test_command,
+            timeout_seconds=timeout_seconds,
+            command_runner=command_runner,
+        ),
+    )
+    builder.add_node("diff_review", diff_review)
+    builder.add_node("blocked", blocked)
+
+    builder.add_edge(START, "intake_task")
+    builder.add_edge("intake_task", "inspect_repository")
+    builder.add_conditional_edges(
+        "inspect_repository",
+        inspection_route,
+        {
+            "select_relevant_files": "select_relevant_files",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "select_relevant_files",
+        select_route,
+        {
+            "summarize_project_context": "summarize_project_context",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_edge("summarize_project_context", "diagnose_task")
+    builder.add_conditional_edges(
+        "diagnose_task",
+        diagnosis_route,
+        {
+            "propose_change_plan": "propose_change_plan",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "propose_change_plan",
+        change_plan_route,
+        {
+            "generate_patch": "generate_patch",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "generate_patch",
+        patch_route,
+        {
+            "run_tests": "run_tests",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "run_tests",
+        repair_review_route,
+        {
+            "perform_repair_attempt": "perform_repair_attempt",
+            "diff_review": "diff_review",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "perform_repair_attempt",
+        repair_review_route,
+        {
+            "perform_repair_attempt": "perform_repair_attempt",
+            "diff_review": "diff_review",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_edge("diff_review", END)
+    builder.add_edge("blocked", END)
+
+    return builder.compile()
+
+
 def _blocked_state(
     state: AgentState,
     reason: str,
@@ -1347,6 +1518,16 @@ def repair_route(state: AgentState) -> str:
     return "perform_repair_attempt"
 
 
+def repair_review_route(state: AgentState) -> str:
+    if state.get("workflow_stage") == "blocked":
+        return "blocked"
+    if not latest_test_failed_or_error(state.get("test_results", [])):
+        return "diff_review"
+    if repair_limit_reached(state.get("repair_attempts", [])):
+        return "diff_review"
+    return "perform_repair_attempt"
+
+
 def _test_execution_prerequisite_error(state: AgentState) -> str | None:
     if "diagnosis" not in state:
         return "Test execution requires valid structured diagnosis."
@@ -1397,6 +1578,92 @@ def _run_validated_test_command(
     validate_test_command(command)
     resolve_command_cwd(command.get("cwd", "."), repo_root=repo_root)
     return command_runner(command, repo_root, timeout_seconds)
+
+
+def _patch_metadata(patch: dict | None) -> dict[str, object]:
+    if not patch:
+        return {
+            "status": "missing",
+            "target_files": [],
+            "changed_lines": 0,
+            "size_bytes": 0,
+        }
+    return {
+        "status": patch.get("status", "unknown"),
+        "target_files": patch.get("target_files", []),
+        "changed_lines": patch.get("changed_lines", 0),
+        "size_bytes": patch.get("size_bytes", 0),
+        "summary": patch.get("summary", ""),
+    }
+
+
+def _review_final_status(
+    state: AgentState,
+    latest_test_result: dict | None,
+    blocked_reason: str | None,
+) -> str:
+    if blocked_reason:
+        return "blocked"
+    if latest_test_result and latest_test_result["status"] == "passed":
+        return "tests_passed"
+    if latest_test_result and latest_test_result["status"] in {"failed", "error"}:
+        if repair_limit_reached(state.get("repair_attempts", [])):
+            return "tests_failed_after_repair_limit"
+        return "tests_failed"
+    if state.get("patch"):
+        return "patch_ready_without_tests"
+    return "no_changes"
+
+
+def _review_diff_summary(
+    patch: dict | None,
+    latest_test_result: dict | None,
+    repair_attempts: list[dict],
+    blocked_reason: str | None,
+) -> str:
+    if not patch:
+        return "No controlled patch is available; no changes were applied."
+    summary = patch.get("summary") or "Controlled unified diff validated."
+    if latest_test_result:
+        summary = f"{summary} Latest test result: {latest_test_result['status']}."
+    if repair_attempts:
+        summary = f"{summary} Repair attempts used: {len(repair_attempts)}."
+    if blocked_reason:
+        summary = f"{summary} Workflow stopped: {blocked_reason}"
+    return summary
+
+
+def _review_known_limitations(
+    state: AgentState,
+    latest_test_result: dict | None,
+    blocked_reason: str | None,
+) -> list[str]:
+    limitations = list(state.get("diagnosis", {}).get("unknowns", []))
+    existing_limitations = state.get("review_status", {}).get("known_limitations", [])
+    for limitation in existing_limitations:
+        if limitation not in limitations:
+            limitations.append(limitation)
+    if blocked_reason and blocked_reason not in limitations:
+        limitations.append(blocked_reason)
+    if not state.get("patch"):
+        limitations.append("No controlled patch is available; no changes were applied.")
+    if latest_test_result and latest_test_result["status"] in {"failed", "error"}:
+        summary = latest_test_result.get("summary", "Latest test result failed or errored.")
+        if summary not in limitations:
+            limitations.append(summary)
+    if state.get("patch") and "Controlled patch application is not enabled yet." not in limitations:
+        limitations.append("Controlled patch application is not enabled yet.")
+    return limitations
+
+
+def _latest_blocked_reason(state: AgentState) -> str | None:
+    if state.get("workflow_stage") != "blocked":
+        return None
+    for event in reversed(state.get("audit", [])):
+        if isinstance(event, dict) and event.get("decision") == "denied" and event.get("reason"):
+            return event["reason"]
+    limitations = state.get("review_status", {}).get("known_limitations", [])
+    return limitations[-1] if limitations else "Workflow blocked before review."
 
 
 def _discover_baseline_tests(files: list[str]) -> list[str]:

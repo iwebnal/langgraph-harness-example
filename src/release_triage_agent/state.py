@@ -125,10 +125,20 @@ class RepairAttempt(TypedDict):
 
 class ReviewSummary(TypedDict):
     status: ReviewStatus
+    final_status: NotRequired[str]
+    original_task: NotRequired[str]
+    diagnosis_summary: NotRequired[str]
+    change_plan_summary: NotRequired[str]
     diff_summary: NotRequired[str]
     changed_files: NotRequired[list[str]]
+    patch_metadata: NotRequired[dict[str, object]]
+    tests_run: NotRequired[list[str]]
+    latest_test_result: NotRequired[TestResult]
+    repair_attempts_used: NotRequired[int]
     risks: NotRequired[list[str]]
+    assumptions: NotRequired[list[str]]
     known_limitations: NotRequired[list[str]]
+    stopped_reason: NotRequired[str]
 
 
 class AuditEvent(TypedDict):
