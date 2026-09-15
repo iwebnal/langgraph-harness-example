@@ -101,10 +101,15 @@ class Patch(TypedDict):
 
 class TestResult(TypedDict):
     command: str
+    argv: NotRequired[list[str]]
     status: TestStatus
     exit_code: NotRequired[int]
+    duration_seconds: NotRequired[float]
     summary: str
     output_excerpt: NotRequired[str]
+    stdout_excerpt: NotRequired[str]
+    stderr_excerpt: NotRequired[str]
+    cwd: NotRequired[str]
 
 
 class RepairAttempt(TypedDict):
@@ -115,6 +120,7 @@ class RepairAttempt(TypedDict):
     policy_result: NotRequired[PolicyResult]
     patch: NotRequired[Patch]
     test_result: NotRequired[TestResult]
+    status: NotRequired[Literal["passed", "failed", "error", "blocked"]]
 
 
 class ReviewSummary(TypedDict):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path, PurePath
+from typing import Any, Callable
 
 from langgraph.graph import END, START, StateGraph
 
@@ -18,7 +19,16 @@ from .patch import (
     validate_candidate_patch,
 )
 from .repository import ReadOnlyRepositoryTools, RepositoryAccessError
+from .repair import (
+    MAX_REPAIR_ATTEMPTS,
+    RepairPlanner,
+    RepairValidationError,
+    latest_test_failed_or_error,
+    repair_limit_reached,
+    validate_repair_output,
+)
 from .state import AgentState, AuditEntry
+from .test_runner import CommandValidationError, resolve_command_cwd, run_test_command, validate_test_command
 
 
 MAX_RELEVANT_FILES = 5
@@ -39,6 +49,7 @@ TASK_STOP_WORDS = {
     "tests",
 }
 PROJECT_METADATA_FILES = ("README.md", "pyproject.toml")
+TestCommandRunner = Callable[[dict[str, Any], str, float], dict[str, Any]]
 
 
 def append_structured_audit(state: AgentState, event: AuditEntry) -> list[AuditEntry]:
@@ -500,6 +511,432 @@ def generate_patch(state: AgentState, patch_generator: PatchGenerator) -> AgentS
     }
 
 
+def run_tests(
+    state: AgentState,
+    command: dict | None = None,
+    timeout_seconds: float = 30,
+    command_runner: TestCommandRunner | None = None,
+) -> AgentState:
+    prerequisite_error = _test_execution_prerequisite_error(state)
+    if prerequisite_error:
+        return _blocked_state(
+            state,
+            prerequisite_error,
+            event_type="command_started",
+            target="test_command",
+        )
+
+    command = command or _default_test_command(state["change_plan"]["tests_to_run"])
+    try:
+        argv = command.get("argv") if isinstance(command, dict) else None
+        audit = append_structured_audit(
+            state,
+            {
+                "event_type": "command_started",
+                "actor": "harness",
+                "message": "Allowlisted test command started.",
+                "target": " ".join(argv) if isinstance(argv, list) else "test_command",
+                "decision": "allowed",
+                "reason": "Command will be validated as structured argv before execution.",
+            },
+        )
+        test_result = _run_validated_test_command(
+            command,
+            repo_root=state["repo_context"]["repo_root"],
+            timeout_seconds=timeout_seconds,
+            command_runner=command_runner,
+        )
+    except CommandValidationError as exc:
+        audit = append_structured_audit(
+            state,
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Denied command was not executed.",
+                "target": "test_command",
+                "decision": "denied",
+                "reason": str(exc),
+            },
+        )
+        return {
+            "workflow_stage": "blocked",
+            "review_status": {
+                "status": "blocked",
+                "known_limitations": [str(exc)],
+            },
+            "audit": audit,
+        }
+
+    audit.append(
+        {
+            "event_type": "command_finished",
+            "actor": "harness",
+            "message": "Allowlisted test command finished.",
+            "target": test_result["command"],
+            "decision": test_result["status"],
+            "reason": (
+                f"exit_code={test_result.get('exit_code')}; "
+                f"duration_seconds={test_result.get('duration_seconds')}; "
+                f"summary={test_result['summary']}"
+            ),
+        }
+    )
+
+    return {
+        "workflow_stage": "ready_for_human_review",
+        "test_results": [*state.get("test_results", []), test_result],
+        "review_status": {
+            "status": "ready_for_human_review",
+            "diff_summary": state["patch"].get("summary", "Validated patch tested."),
+            "changed_files": state["patch"]["target_files"],
+            "risks": state["change_plan"]["policy_risks"],
+            "known_limitations": ["Repair loop is not implemented until Phase 9."],
+        },
+        "audit": audit,
+    }
+
+
+def perform_repair_attempt(
+    state: AgentState,
+    repair_planner: RepairPlanner,
+    patch_generator: PatchGenerator,
+    command: dict | None = None,
+    timeout_seconds: float = 30,
+    command_runner: TestCommandRunner | None = None,
+) -> AgentState:
+    prerequisite_error = _repair_prerequisite_error(state)
+    if prerequisite_error:
+        return _blocked_state(
+            state,
+            prerequisite_error,
+            event_type="repair_attempt_started",
+            target="repair_attempt",
+        )
+
+    attempt_number = len(state.get("repair_attempts", [])) + 1
+    failing_test_result = state["test_results"][-1]
+    audit = append_structured_audit(
+        state,
+        {
+            "event_type": "repair_attempt_started",
+            "actor": "agent",
+            "message": "Repair attempt started.",
+            "target": f"repair_attempt:{attempt_number}",
+            "decision": "allowed",
+            "reason": f"Latest test result was {failing_test_result['status']}; max attempts is {MAX_REPAIR_ATTEMPTS}.",
+        },
+    )
+
+    try:
+        raw_repair = repair_planner.propose_repair(
+            state["task"],
+            state["repo_context"],
+            state["diagnosis"],
+            state["change_plan"],
+            failing_test_result,
+            attempt_number,
+        )
+        hypothesis, planned_change, repair_change_plan = validate_repair_output(
+            raw_repair,
+            repo_context=state["repo_context"],
+            diagnosis=state["diagnosis"],
+        )
+    except (RepairValidationError, KeyError, TypeError, AttributeError) as exc:
+        audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Repair planner output failed validation.",
+                "target": f"repair_attempt:{attempt_number}",
+                "decision": "denied",
+                "reason": str(exc),
+            }
+        )
+        repair_attempt = {
+            "attempt": attempt_number,
+            "failing_test_summary": failing_test_result["summary"],
+            "hypothesis": "",
+            "planned_change": "",
+            "status": "blocked",
+        }
+        return {
+            "workflow_stage": "blocked",
+            "repair_attempts": [*state.get("repair_attempts", []), repair_attempt],
+            "review_status": {
+                "status": "blocked",
+                "known_limitations": [str(exc)],
+            },
+            "audit": audit,
+        }
+
+    policy_result = check_change_plan_policy(
+        repair_change_plan,
+        policy_path=Path(state["repo_context"]["repo_root"]) / "harness" / "policy.yaml",
+    )
+    audit.append(
+        {
+            "event_type": "policy_checked",
+            "actor": "harness",
+            "message": "Repair ChangePlan policy check completed.",
+            "target": f"repair_attempt:{attempt_number}:change_plan",
+            "decision": "allowed" if policy_result["allowed"] else "denied",
+            "reason": (
+                f"Checked rules: {', '.join(policy_result.get('checked_rules', []))}. "
+                f"Violations: {len(policy_result['violations'])}."
+            ),
+        }
+    )
+    if not policy_result["allowed"]:
+        repair_attempt = {
+            "attempt": attempt_number,
+            "failing_test_summary": failing_test_result["summary"],
+            "hypothesis": hypothesis,
+            "planned_change": planned_change,
+            "policy_result": policy_result,
+            "status": "blocked",
+        }
+        audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Repair ChangePlan blocked by policy.",
+                "target": f"repair_attempt:{attempt_number}",
+                "decision": "denied",
+                "reason": "Repair ChangePlan policy check failed.",
+            }
+        )
+        return {
+            "workflow_stage": "blocked",
+            "change_plan": repair_change_plan,
+            "policy_result": policy_result,
+            "repair_attempts": [*state.get("repair_attempts", []), repair_attempt],
+            "review_status": {
+                "status": "blocked",
+                "known_limitations": ["Repair ChangePlan policy check failed."],
+            },
+            "audit": audit,
+        }
+
+    try:
+        raw_patch = patch_generator.generate_patch(
+            state["task"],
+            state["repo_context"],
+            state["diagnosis"],
+            repair_change_plan,
+        )
+        patch, patch_policy_result = validate_candidate_patch(
+            raw_patch,
+            repo_context=state["repo_context"],
+            change_plan=repair_change_plan,
+        )
+    except PatchPolicyError as exc:
+        audit.append(
+            {
+                "event_type": "policy_checked",
+                "actor": "harness",
+                "message": "Repair patch policy check completed.",
+                "target": f"repair_attempt:{attempt_number}:patch",
+                "decision": "denied",
+                "reason": f"Patch policy violations: {len(exc.policy_result['violations'])}.",
+            }
+        )
+        audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Repair patch blocked.",
+                "target": f"repair_attempt:{attempt_number}",
+                "decision": "denied",
+                "reason": str(exc),
+            }
+        )
+        repair_attempt = {
+            "attempt": attempt_number,
+            "failing_test_summary": failing_test_result["summary"],
+            "hypothesis": hypothesis,
+            "planned_change": planned_change,
+            "policy_result": policy_result,
+            "status": "blocked",
+        }
+        return {
+            "workflow_stage": "blocked",
+            "change_plan": repair_change_plan,
+            "policy_result": policy_result,
+            "patch_policy_result": exc.policy_result,
+            "repair_attempts": [*state.get("repair_attempts", []), repair_attempt],
+            "review_status": {
+                "status": "blocked",
+                "known_limitations": [str(exc)],
+            },
+            "audit": audit,
+        }
+    except (PatchValidationError, KeyError, TypeError, AttributeError) as exc:
+        audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Repair patch failed validation.",
+                "target": f"repair_attempt:{attempt_number}",
+                "decision": "denied",
+                "reason": str(exc),
+            }
+        )
+        repair_attempt = {
+            "attempt": attempt_number,
+            "failing_test_summary": failing_test_result["summary"],
+            "hypothesis": hypothesis,
+            "planned_change": planned_change,
+            "policy_result": policy_result,
+            "status": "blocked",
+        }
+        return {
+            "workflow_stage": "blocked",
+            "change_plan": repair_change_plan,
+            "policy_result": policy_result,
+            "repair_attempts": [*state.get("repair_attempts", []), repair_attempt],
+            "review_status": {
+                "status": "blocked",
+                "known_limitations": [str(exc)],
+            },
+            "audit": audit,
+        }
+
+    audit.append(
+        {
+            "event_type": "policy_checked",
+            "actor": "harness",
+            "message": "Repair patch policy check completed.",
+            "target": f"repair_attempt:{attempt_number}:patch",
+            "decision": "allowed",
+            "reason": (
+                "Repair patch targets and limits were checked. "
+                f"Checked rules: {', '.join(patch_policy_result.get('checked_rules', []))}."
+            ),
+        }
+    )
+    audit.append(
+        {
+            "event_type": "patch_validated",
+            "actor": "harness",
+            "message": "Repair candidate unified diff validated.",
+            "target": f"repair_attempt:{attempt_number}:patch",
+            "decision": "allowed",
+            "reason": (
+                f"Validated {len(patch['target_files'])} file(s), "
+                f"{patch.get('changed_lines', 0)} changed line(s)."
+            ),
+        }
+    )
+
+    command = command or _default_test_command(repair_change_plan["tests_to_run"])
+    try:
+        argv = command.get("argv") if isinstance(command, dict) else None
+        audit.append(
+            {
+                "event_type": "command_started",
+                "actor": "harness",
+                "message": "Repair test command started.",
+                "target": " ".join(argv) if isinstance(argv, list) else "test_command",
+                "decision": "allowed",
+                "reason": "Command will be validated as structured argv before execution.",
+            }
+        )
+        test_result = _run_validated_test_command(
+            command,
+            repo_root=state["repo_context"]["repo_root"],
+            timeout_seconds=timeout_seconds,
+            command_runner=command_runner,
+        )
+    except CommandValidationError as exc:
+        audit.append(
+            {
+                "event_type": "run_blocked",
+                "actor": "harness",
+                "message": "Denied repair command was not executed.",
+                "target": f"repair_attempt:{attempt_number}:test_command",
+                "decision": "denied",
+                "reason": str(exc),
+            }
+        )
+        repair_attempt = {
+            "attempt": attempt_number,
+            "failing_test_summary": failing_test_result["summary"],
+            "hypothesis": hypothesis,
+            "planned_change": planned_change,
+            "policy_result": policy_result,
+            "patch": patch,
+            "status": "blocked",
+        }
+        return {
+            "workflow_stage": "blocked",
+            "change_plan": repair_change_plan,
+            "policy_result": policy_result,
+            "patch_policy_result": patch_policy_result,
+            "patch": patch,
+            "repair_attempts": [*state.get("repair_attempts", []), repair_attempt],
+            "review_status": {
+                "status": "blocked",
+                "known_limitations": [str(exc)],
+            },
+            "audit": audit,
+        }
+
+    audit.append(
+        {
+            "event_type": "command_finished",
+            "actor": "harness",
+            "message": "Repair test command finished.",
+            "target": test_result["command"],
+            "decision": test_result["status"],
+            "reason": (
+                f"exit_code={test_result.get('exit_code')}; "
+                f"duration_seconds={test_result.get('duration_seconds')}; "
+                f"summary={test_result['summary']}"
+            ),
+        }
+    )
+
+    repair_attempt = {
+        "attempt": attempt_number,
+        "failing_test_summary": failing_test_result["summary"],
+        "hypothesis": hypothesis,
+        "planned_change": planned_change,
+        "policy_result": policy_result,
+        "patch": patch,
+        "test_result": test_result,
+        "status": test_result["status"],
+    }
+    repair_attempts = [*state.get("repair_attempts", []), repair_attempt]
+    test_results = [*state.get("test_results", []), test_result]
+    latest_failed = latest_test_failed_or_error(test_results)
+
+    limitations = []
+    if latest_failed and repair_limit_reached(repair_attempts):
+        limitations.append("Tests still fail after 2 repair attempts.")
+    elif latest_failed:
+        limitations.append("Repair attempt failed; another repair attempt is allowed.")
+    else:
+        limitations.append("Tests passed after repair; ready for human review.")
+
+    return {
+        "workflow_stage": "ready_for_human_review",
+        "change_plan": repair_change_plan,
+        "policy_result": policy_result,
+        "patch_policy_result": patch_policy_result,
+        "patch": patch,
+        "test_results": test_results,
+        "repair_attempts": repair_attempts,
+        "review_status": {
+            "status": "ready_for_human_review",
+            "diff_summary": patch.get("summary", "Validated repair patch tested."),
+            "changed_files": patch["target_files"],
+            "risks": repair_change_plan["policy_risks"],
+            "known_limitations": limitations,
+        },
+        "audit": audit,
+    }
+
+
 def inspection_route(state: AgentState) -> str:
     if state.get("workflow_stage") == "blocked":
         return "blocked"
@@ -679,6 +1116,181 @@ def build_coding_patch_graph(llm: DiagnosisLLM, planner: ChangePlanner, patch_ge
     return builder.compile()
 
 
+def build_coding_test_execution_graph(
+    llm: DiagnosisLLM,
+    planner: ChangePlanner,
+    patch_generator: PatchGenerator,
+    *,
+    test_command: dict | None = None,
+    timeout_seconds: float = 30,
+):
+    builder = StateGraph(AgentState)
+    builder.add_node("intake_task", intake_task)
+    builder.add_node("inspect_repository", inspect_repository)
+    builder.add_node("select_relevant_files", select_relevant_files)
+    builder.add_node("summarize_project_context", summarize_project_context)
+    builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
+    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner))
+    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator))
+    builder.add_node("run_tests", lambda state: run_tests(state, command=test_command, timeout_seconds=timeout_seconds))
+    builder.add_node("blocked", blocked)
+
+    builder.add_edge(START, "intake_task")
+    builder.add_edge("intake_task", "inspect_repository")
+    builder.add_conditional_edges(
+        "inspect_repository",
+        inspection_route,
+        {
+            "select_relevant_files": "select_relevant_files",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "select_relevant_files",
+        select_route,
+        {
+            "summarize_project_context": "summarize_project_context",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_edge("summarize_project_context", "diagnose_task")
+    builder.add_conditional_edges(
+        "diagnose_task",
+        diagnosis_route,
+        {
+            "propose_change_plan": "propose_change_plan",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "propose_change_plan",
+        change_plan_route,
+        {
+            "generate_patch": "generate_patch",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "generate_patch",
+        patch_route,
+        {
+            "run_tests": "run_tests",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_edge("run_tests", END)
+    builder.add_edge("blocked", END)
+
+    return builder.compile()
+
+
+def build_coding_repair_graph(
+    llm: DiagnosisLLM,
+    planner: ChangePlanner,
+    patch_generator: PatchGenerator,
+    repair_planner: RepairPlanner,
+    repair_patch_generator: PatchGenerator,
+    *,
+    test_command: dict | None = None,
+    timeout_seconds: float = 30,
+    command_runner: TestCommandRunner | None = None,
+):
+    builder = StateGraph(AgentState)
+    builder.add_node("intake_task", intake_task)
+    builder.add_node("inspect_repository", inspect_repository)
+    builder.add_node("select_relevant_files", select_relevant_files)
+    builder.add_node("summarize_project_context", summarize_project_context)
+    builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
+    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner))
+    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator))
+    builder.add_node(
+        "run_tests",
+        lambda state: run_tests(
+            state,
+            command=test_command,
+            timeout_seconds=timeout_seconds,
+            command_runner=command_runner,
+        ),
+    )
+    builder.add_node(
+        "perform_repair_attempt",
+        lambda state: perform_repair_attempt(
+            state,
+            repair_planner,
+            repair_patch_generator,
+            command=test_command,
+            timeout_seconds=timeout_seconds,
+            command_runner=command_runner,
+        ),
+    )
+    builder.add_node("blocked", blocked)
+
+    builder.add_edge(START, "intake_task")
+    builder.add_edge("intake_task", "inspect_repository")
+    builder.add_conditional_edges(
+        "inspect_repository",
+        inspection_route,
+        {
+            "select_relevant_files": "select_relevant_files",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "select_relevant_files",
+        select_route,
+        {
+            "summarize_project_context": "summarize_project_context",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_edge("summarize_project_context", "diagnose_task")
+    builder.add_conditional_edges(
+        "diagnose_task",
+        diagnosis_route,
+        {
+            "propose_change_plan": "propose_change_plan",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "propose_change_plan",
+        change_plan_route,
+        {
+            "generate_patch": "generate_patch",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "generate_patch",
+        patch_route,
+        {
+            "run_tests": "run_tests",
+            "blocked": "blocked",
+        },
+    )
+    builder.add_conditional_edges(
+        "run_tests",
+        repair_route,
+        {
+            "perform_repair_attempt": "perform_repair_attempt",
+            "blocked": "blocked",
+            "end": END,
+        },
+    )
+    builder.add_conditional_edges(
+        "perform_repair_attempt",
+        repair_route,
+        {
+            "perform_repair_attempt": "perform_repair_attempt",
+            "blocked": "blocked",
+            "end": END,
+        },
+    )
+    builder.add_edge("blocked", END)
+
+    return builder.compile()
+
+
 def _blocked_state(
     state: AgentState,
     reason: str,
@@ -717,6 +1329,74 @@ def change_plan_route(state: AgentState) -> str:
     if state.get("workflow_stage") == "blocked":
         return "blocked"
     return "generate_patch"
+
+
+def patch_route(state: AgentState) -> str:
+    if state.get("workflow_stage") == "blocked":
+        return "blocked"
+    return "run_tests"
+
+
+def repair_route(state: AgentState) -> str:
+    if state.get("workflow_stage") == "blocked":
+        return "blocked"
+    if not latest_test_failed_or_error(state.get("test_results", [])):
+        return "end"
+    if repair_limit_reached(state.get("repair_attempts", [])):
+        return "end"
+    return "perform_repair_attempt"
+
+
+def _test_execution_prerequisite_error(state: AgentState) -> str | None:
+    if "diagnosis" not in state:
+        return "Test execution requires valid structured diagnosis."
+    if "change_plan" not in state:
+        return "Test execution requires valid ChangePlan."
+    plan_policy_result = state.get("policy_result")
+    if not plan_policy_result or plan_policy_result.get("stage") != "plan" or not plan_policy_result.get("allowed"):
+        return "Test execution requires allowed ChangePlan policy result."
+    patch_policy_result = state.get("patch_policy_result")
+    if not patch_policy_result or patch_policy_result.get("stage") != "patch" or not patch_policy_result.get("allowed"):
+        return "Test execution requires allowed patch policy result."
+    patch = state.get("patch")
+    if not patch or patch.get("status") != "validated":
+        return "Test execution requires a validated controlled patch."
+    return None
+
+
+def _repair_prerequisite_error(state: AgentState) -> str | None:
+    test_prerequisite_error = _test_execution_prerequisite_error(state)
+    if test_prerequisite_error:
+        return test_prerequisite_error
+    test_results = state.get("test_results", [])
+    if not test_results:
+        return "Repair requires an executed test result."
+    if not latest_test_failed_or_error(test_results):
+        return "Repair requires the latest test result to be failed or error."
+    if repair_limit_reached(state.get("repair_attempts", [])):
+        return "Repair attempt limit reached; third repair attempt is denied."
+    return None
+
+
+def _default_test_command(tests_to_run: list[str]) -> dict:
+    if "python -m pytest" in tests_to_run:
+        return {"argv": ["python", "-m", "pytest"], "cwd": "."}
+    return {"argv": ["pytest"], "cwd": "."}
+
+
+def _run_validated_test_command(
+    command: dict,
+    *,
+    repo_root: str,
+    timeout_seconds: float,
+    command_runner: TestCommandRunner | None,
+) -> dict[str, Any]:
+    if command_runner is None:
+        return run_test_command(command, repo_root=repo_root, timeout_seconds=timeout_seconds)
+
+    validate_test_command(command)
+    resolve_command_cwd(command.get("cwd", "."), repo_root=repo_root)
+    return command_runner(command, repo_root, timeout_seconds)
 
 
 def _discover_baseline_tests(files: list[str]) -> list[str]:

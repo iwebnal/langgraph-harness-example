@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 7 — Controlled unified diff patch
+Current phase: Phase 9 — Repair loop
 
 Status: Completed
 
@@ -103,6 +103,32 @@ Phase 7 добавил controlled unified diff patch generation and validation:
 - blocks malformed or unsafe candidate patches before apply/review;
 - stops at `ready_for_human_review` with a validated patch and does not run tests, repair, Git/GitHub, sandbox or deployment actions.
 
+Phase 8 добавил allowlisted test command execution:
+
+- defines structured argv-based test command runner in `src/release_triage_agent/test_runner.py`;
+- allows only `pytest` and `python -m pytest` for the MVP;
+- rejects arbitrary shell strings, command chaining/control tokens and denied tools before execution;
+- resolves/canonicalizes command cwd and requires it to stay inside repository root;
+- runs subprocesses with `shell=False`, timeout, stdout/stderr capture, exit code and duration metadata;
+- stores bounded test output excerpts and `test_results` in `AgentState`;
+- connects test execution after valid diagnosis, valid ChangePlan, allowed plan policy, validated patch and allowed patch policy;
+- records `command_started`, `command_finished` and denied/blocked command audit events;
+- does not implement repair loop, Git/GitHub integration, sandbox or deployment.
+
+Phase 9 добавил bounded repair loop:
+
+- defines a narrow `RepairPlanner` protocol and deterministic repair output validation in `src/release_triage_agent/repair.py`;
+- caps repair attempts at 2 and makes a third repair attempt impossible;
+- starts repair only after valid diagnosis, valid ChangePlan, allowed plan policy, validated patch, allowed patch policy and failed/error test result;
+- requires each repair to produce a repair hypothesis/note plus an updated ChangePlan;
+- reruns Phase 6 policy check for each repair ChangePlan;
+- reruns Phase 7 controlled unified diff validation and patch policy check for each repair patch;
+- reruns Phase 8 allowlisted test execution after each validated repair patch;
+- stores repair attempts, updated policy results, patch metadata, test results and audit in `AgentState`;
+- stops at `ready_for_human_review` when tests pass after repair or when tests still fail after 2 attempts;
+- fails closed on invalid repair output, policy denial, invalid repair patch or denied command;
+- does not implement Phase 10 diff review improvements, Git/GitHub integration, sandbox or deployment.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -113,8 +139,8 @@ Phase 7 добавил controlled unified diff patch generation and validation:
 - [x] Phase 5 — ChangePlan
 - [x] Phase 6 — Harness policy engine
 - [x] Phase 7 — Controlled unified diff patch
-- [ ] Phase 8 — Test execution
-- [ ] Phase 9 — Repair loop
+- [x] Phase 8 — Test execution
+- [x] Phase 9 — Repair loop
 - [ ] Phase 10 — Diff review state
 - [ ] Phase 11 — MVP evals
 - [ ] Phase 12 — Checkpointing and durable audit
@@ -161,6 +187,15 @@ Phase 7 добавил controlled unified diff patch generation and validation:
 - Extended `AgentState` with `patch_policy_result` and patch `size_bytes` metadata.
 - Added focused patch validation tests in `tests/test_patch.py`.
 - Added fake generator graph tests in `tests/test_coding_patch_graph.py`.
+- Phase 8 allowlisted test runner added in `src/release_triage_agent/test_runner.py`.
+- Added test execution workflow support in `src/release_triage_agent/coding_graph.py`.
+- Extended `TestResult` state metadata with structured argv, cwd, duration and stdout/stderr excerpts.
+- Added focused command runner tests in `tests/test_test_runner.py`.
+- Added graph integration tests in `tests/test_coding_test_execution_graph.py`.
+- Phase 9 repair planning/validation support added in `src/release_triage_agent/repair.py`.
+- Added bounded repair loop workflow support in `src/release_triage_agent/coding_graph.py`.
+- Extended `RepairAttempt` state metadata with a repair attempt status.
+- Added fake planner/generator/runner repair graph tests in `tests/test_coding_repair_graph.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -172,30 +207,40 @@ Baseline result before Phase 7: 49 passed.
 
 Final result after Phase 7: 60 passed.
 
+Baseline result before Phase 8: 60 passed.
+
+Final result after Phase 8: 70 passed.
+
+Baseline result before Phase 9: 70 passed.
+
+Final result after Phase 9: 79 passed.
+
 ## Current Work
 
-Phase 7 завершена. Candidate patch генерируется только после valid structured diagnosis, valid ChangePlan и allowed plan-stage `PolicyResult`; затем unified diff валидируется детерминированно, повторно проверяется patch-stage policy engine и сохраняется для human review без применения к файловой системе.
+Phase 9 завершена. Repair loop запускается только после failed/error test result from the allowlisted runner and reuses the same ChangePlan policy, patch validation/policy and test command controls for each repair attempt, with a deterministic max of 2 attempts.
 
 ## Next Actions
 
-1. Начать Phase 8: Test execution.
-2. Добавить command whitelist runner for `pytest` / `python -m pytest`.
-3. Enforce structured argv matching, repo-root working directory, timeout, output capture and exit code capture.
-4. Save command audit and `test_results` in `AgentState`.
-5. Не добавлять repair loop, Git/GitHub integration, sandbox или deployment до соответствующих фаз.
+1. Начать Phase 10: Diff review state.
+2. Build final review summary from diagnosis, ChangePlan, patch metadata, repair attempts and test results.
+3. Ensure successful and failed-after-repair runs both end with clear `ready_for_human_review` state.
+4. Include changed files, tests run, risks, assumptions and known limitations in reviewer-facing state.
+5. Не добавлять Git/GitHub integration, sandbox или deployment до соответствующих фаз.
 
 ## Known Issues
 
 - `harness/eval_cases.jsonl` пока покрывает только release triage routing examples.
 - Patch validation exists, but no controlled patch application step has been enabled yet.
-- Нет command allowlist runner.
+- Command allowlist runner exists only for `pytest` and `python -m pytest`; no lint/typecheck/package commands are allowed yet.
 - Нет durable checkpointing.
 - Нет Git/GitHub boundaries.
 - Structured diagnosis currently depends on deterministic heuristic relevant-file selection from Phase 3.
 - Phase 4 uses fake/mocked LLMs in tests; no real LLM API integration is configured.
 - Phase 5 uses fake/mocked planners in tests; no real planner/LLM API integration is configured.
 - Phase 6 policy parser intentionally supports only the minimal YAML subset used by `harness/policy.yaml`; replacing it with a full YAML dependency is a later decision.
-- Phase 7 does not execute tests; validated patches stop at human review until Phase 8 introduces an allowlisted command runner.
+- Phase 8 runs tests against the current working tree after patch validation; a controlled apply step is still not enabled in this architecture.
+- Repair loop exists, but because controlled patch application is not enabled yet, tests still run against the current working tree rather than applied candidate diffs.
+- Final diff review remains basic until Phase 10.
 
 ## Decisions
 
@@ -213,6 +258,10 @@ Phase 7 завершена. Candidate patch генерируется тольк�
 - Phase 6 реализован как deterministic Python policy engine; policy denial blocks before patch generation and missing/invalid policy config fails closed.
 - Phase 7 реализован как validation-first controlled unified diff stage; current architecture does not need an apply step yet, so no filesystem writes are performed by the patch workflow.
 - Patch policy result is stored separately as `patch_policy_result`, preserving the plan-stage `policy_result` for audit/debugging.
+- Phase 8 keeps command allowlist in code because `harness/policy.yaml` already documents the MVP commands and no policy relaxation was needed; formal policy-backed command config can be added later without broadening allowed commands.
+- `pytest` is executed via the active Python interpreter as `sys.executable -m pytest` while preserving logical command metadata as `pytest`, avoiding PATH-dependent behavior without introducing shell execution.
+- Phase 9 uses a separate `RepairPlanner` protocol so repair diagnosis/planning remains a bounded structured-output step with no filesystem, shell, Git, GitHub, network, sandbox or deployment capability.
+- Repair attempts update top-level `change_plan`, `policy_result`, `patch_policy_result`, `patch` and append `test_results`, while preserving each attempt snapshot under `repair_attempts`.
 
 ## Baseline Test Command
 
