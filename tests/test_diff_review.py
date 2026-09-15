@@ -1,3 +1,5 @@
+import subprocess
+
 from release_triage_agent.coding_graph import build_coding_diff_review_graph, diff_review
 from release_triage_agent.checkpoint import generate_run_id
 from release_triage_agent.graph import graph as release_triage_graph
@@ -98,6 +100,20 @@ harness_policy:
     )
 
 
+def run(argv, cwd):
+    if argv and argv[0] == "git":
+        argv = ["/usr/bin/git", *argv[1:]]
+    subprocess.run(argv, cwd=str(cwd), shell=False, text=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def init_git_repo(path):
+    run(["git", "init", "-b", "main"], path)
+    run(["git", "config", "user.email", "test@example.com"], path)
+    run(["git", "config", "user.name", "Test User"], path)
+    run(["git", "add", "README.md", "pyproject.toml", "src/feature.py", "tests/test_feature.py", "harness/policy.yaml"], path)
+    run(["git", "commit", "-m", "initial"], path)
+
+
 def diagnosis():
     return {
         "problem": "Policy route behavior needs a focused source update.",
@@ -157,8 +173,12 @@ def fake_test_result(status, exit_code=1, summary=None):
     return result
 
 
-def run_review_graph(tmp_path, *, test_results, repair_patches=None, final_review_approved=True):
+def run_review_graph(tmp_path, *, test_results, repair_patches=None, final_review_approved=True, git_dirty=False):
     make_repo(tmp_path)
+    init_git_repo(tmp_path)
+    if git_dirty:
+        write_text(tmp_path / "README.md", "# Demo repo\nlocal change\n")
+        write_text(tmp_path / "scratch.txt", "untracked\n")
     request = "Inspect policy route behavior"
     approval_decisions = []
     if final_review_approved:
@@ -276,6 +296,23 @@ def test_review_audit_includes_diff_review_and_ready_for_human_review_events(tmp
 
     event_types = [event["event_type"] for event in result["audit"] if isinstance(event, dict)]
     assert event_types[-2:] == ["diff_review", "ready_for_human_review"]
+
+
+def test_final_review_includes_dirty_worktree_and_local_diff_awareness(tmp_path):
+    result = run_review_graph(
+        tmp_path,
+        test_results=[fake_test_result("passed", exit_code=0)],
+        git_dirty=True,
+    )
+
+    git = result["review_status"]["git"]
+    assert git["current_branch"] == "main"
+    assert git["dirty"] is True
+    assert "README.md" in git["changed_files"]
+    assert git["untracked_files"] == ["scratch.txt"]
+    assert "Dirty Git worktree detected" in " ".join(result["review_status"]["known_limitations"])
+    event_types = [event["event_type"] for event in result["audit"] if isinstance(event, dict)]
+    assert "git_read" in event_types
 
 
 def test_final_review_gate_produces_ready_for_human_review_without_unsafe_actions(tmp_path):

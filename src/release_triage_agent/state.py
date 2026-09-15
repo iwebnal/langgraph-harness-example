@@ -63,6 +63,14 @@ class RepoContext(TypedDict):
     baseline_tests: NotRequired[list[str]]
     dependency_files: NotRequired[list[str]]
     conventions: NotRequired[list[str]]
+    git: NotRequired["GitContext"]
+
+
+class GitStatusEntry(TypedDict):
+    path: str
+    index_status: str
+    worktree_status: str
+    untracked: bool
 
 
 class Diagnosis(TypedDict):
@@ -122,6 +130,16 @@ class TestResult(TypedDict):
     cwd: NotRequired[str]
 
 
+class GitContext(TypedDict):
+    current_branch: str
+    status_summary: str
+    diff_summary: str
+    changed_files: list[str]
+    untracked_files: list[str]
+    dirty: bool
+    status_entries: list[GitStatusEntry]
+
+
 class RepairAttempt(TypedDict):
     attempt: int
     failing_test_summary: str
@@ -145,6 +163,7 @@ class ReviewSummary(TypedDict):
     tests_run: NotRequired[list[str]]
     latest_test_result: NotRequired[TestResult]
     repair_attempts_used: NotRequired[int]
+    git: NotRequired[GitContext]
     risks: NotRequired[list[str]]
     assumptions: NotRequired[list[str]]
     known_limitations: NotRequired[list[str]]

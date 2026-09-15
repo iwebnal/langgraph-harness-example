@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 13 — Human-in-the-loop
+Current phase: Phase 14 — Git boundaries
 
 Status: Completed
 
@@ -173,6 +173,19 @@ Phase 13 добавил deterministic human-in-the-loop approval gates:
 - stops rejected or expired approvals with controlled blocked state and clear reason;
 - preserves release triage behavior and adds no Git/GitHub, sandbox, deployment, network or arbitrary shell capability.
 
+Phase 14 добавил read-only Git boundaries and local diff awareness:
+
+- defines deterministic read-only Git wrapper in `src/release_triage_agent/git_boundary.py`;
+- allows only structured read operations for current branch, repository root, porcelain status, diff stat and diff names;
+- runs Git through structured argv with `shell=False` and fixed `/usr/bin/git` executable;
+- enforces canonical repository root and cwd boundaries before every Git operation;
+- denies unsupported, write, destructive, force and branch-creation Git operations;
+- fails closed for path traversal, cwd outside repo root, non-git directories, unsupported commands, command errors and timeouts;
+- exposes current branch, status summary, local diff summary, changed files, untracked files and dirty worktree detection;
+- stores Git context in `AgentState.repo_context.git` and `review_status.git` during final review when available;
+- records `git_read` and `git_denied` audit events;
+- preserves patch/test/repair behavior and adds no Git writes, GitHub integration, PR creation, sandbox or deployment capability.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -189,7 +202,7 @@ Phase 13 добавил deterministic human-in-the-loop approval gates:
 - [x] Phase 11 — MVP evals
 - [x] Phase 12 — Checkpointing and durable audit
 - [x] Phase 13 — Human-in-the-loop
-- [ ] Phase 14 — Git boundaries
+- [x] Phase 14 — Git boundaries
 - [ ] Phase 15 — GitHub boundaries
 - [ ] Phase 16 — Sandbox execution
 - [ ] Phase 17 — Expanded tooling
@@ -257,6 +270,11 @@ Phase 13 добавил deterministic human-in-the-loop approval gates:
 - Future controlled apply is represented as an approval contract only; no apply implementation was added.
 - Added focused approval tests in `tests/test_approval.py`.
 - Updated MVP eval expectations for protected policy changes to require explicit approval rather than silently proceeding.
+- Phase 14 read-only Git boundary support added in `src/release_triage_agent/git_boundary.py`.
+- Extended `AgentState` with `GitContext` and Git status entry schemas.
+- Final diff review now includes read-only Git context and dirty worktree/local diff awareness when `repo_context.repo_root` is a Git repository.
+- Added focused Git boundary tests in `tests/test_git_boundary.py`.
+- Added final review tests for dirty worktree and local diff awareness in `tests/test_diff_review.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -292,22 +310,27 @@ Baseline result before Phase 13: 110 passed.
 
 Final result after Phase 13: 120 passed.
 
+Baseline result before Phase 14: 120 passed.
+
+Final result after Phase 14: 132 passed.
+
 ## Current Work
 
-Phase 13 завершена. Human approval requests and decisions are now structured, scoped, audited and enforced deterministically around high-risk/protected/policy ChangePlans, final review and the future controlled apply boundary contract.
+Phase 14 завершена. Read-only Git context is available through a safe wrapper and final review can surface current branch, status summary, changed/untracked files, local diff summary and dirty worktree warnings without enabling Git writes.
 
 ## Next Actions
 
-1. Начать Phase 14: Git boundaries.
-2. Add read-only Git context and local diff awareness through a safe wrapper.
-3. Detect dirty worktree and prevent overwriting unrelated user changes without adding push, merge, PR, sandbox or deployment capabilities.
+1. Начать Phase 15: GitHub boundaries.
+2. Add limited GitHub awareness for read PR/issue context and draft status/comment data only.
+3. Keep GitHub writes, merge, deployment triggers, sandbox and production access unavailable unless later phases explicitly add gated capabilities.
 
 ## Known Issues
 
 - MVP eval cases now cover release triage and coding workflow behavior, but there is no standalone CLI wrapper yet.
 - Patch validation exists, but no controlled patch application step has been enabled yet.
 - Command allowlist runner exists only for `pytest` and `python -m pytest`; no lint/typecheck/package commands are allowed yet.
-- Нет Git/GitHub boundaries.
+- Git boundaries are read-only only; no commit, checkout, branch creation, reset, clean, tag, push or merge capability exists.
+- Нет GitHub boundaries.
 - Structured diagnosis currently depends on deterministic heuristic relevant-file selection from Phase 3.
 - Phase 4 uses fake/mocked LLMs in tests; no real LLM API integration is configured.
 - Phase 5 uses fake/mocked planners in tests; no real planner/LLM API integration is configured.
@@ -320,6 +343,7 @@ Phase 13 завершена. Human approval requests and decisions are now struc
 - No durable eval result storage is wired yet; eval results remain returned in memory unless a caller persists workflow state through checkpointing.
 - Human approvals are accepted from structured state only; there is no external approval ticket system or LangGraph interrupt UI yet.
 - Protected/policy-related ChangePlans now stop for approval, but controlled apply remains unavailable, so approval does not implement or imply filesystem mutation.
+- Final review treats Git context as read-only summary data; if a repository root is not a Git repository, Git context is unavailable and the workflow continues with an audited limitation.
 
 ## Decisions
 
@@ -354,6 +378,10 @@ Phase 13 завершена. Human approval requests and decisions are now struc
 - Approved decisions must include either `one_time_use=true` or a future `expires_at`; expired decisions are invalid.
 - Pending final review approval stops at `ready_for_human_review` and does not run diff review aggregation or any unsafe action.
 - The future controlled apply boundary is represented as an approval contract only; apply remains unimplemented until a later phase.
+- Phase 14 Git wrapper is read-only and allowlist-based; callers cannot pass arbitrary Git commands.
+- Git commands run via structured argv and `shell=False`; the wrapper executes `/usr/bin/git` while preserving public logical argv as `git`.
+- Dirty worktree detection is informational in Phase 14 and is surfaced in review as a warning to prevent overwriting unrelated user changes; it does not apply, revert or mutate files.
+- Git failures in final review do not fabricate Git context; they are recorded as `git_denied` audit events and shown as known limitations.
 
 ## Baseline Test Command
 

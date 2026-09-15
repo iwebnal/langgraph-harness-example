@@ -61,6 +61,15 @@ def test_coding_agent_state_shape_accepts_structured_mvp_data():
             "project_summary": "Small LangGraph release triage agent",
             "relevant_files": [{"path": "tests/test_policy.py", "reason": "policy routing coverage"}],
             "baseline_tests": ["pytest"],
+            "git": {
+                "current_branch": "main",
+                "status_summary": "Git worktree clean.",
+                "diff_summary": "No local tracked diff.",
+                "changed_files": [],
+                "untracked_files": [],
+                "dirty": False,
+                "status_entries": [],
+            },
         },
         "diagnosis": {
             "problem": "Policy routing needs coverage.",
@@ -92,7 +101,18 @@ def test_coding_agent_state_shape_accepts_structured_mvp_data():
         },
         "test_results": [{"command": "pytest", "status": "not_run", "summary": "Not run yet."}],
         "repair_attempts": [],
-        "review_status": {"status": "not_started"},
+        "review_status": {
+            "status": "not_started",
+            "git": {
+                "current_branch": "main",
+                "status_summary": "Git worktree clean.",
+                "diff_summary": "No local tracked diff.",
+                "changed_files": [],
+                "untracked_files": [],
+                "dirty": False,
+                "status_entries": [],
+            },
+        },
         "audit": [
             "legacy release triage audit event",
             {"event_type": "task_received", "actor": "agent", "message": "Task stored."},

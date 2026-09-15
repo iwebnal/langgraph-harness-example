@@ -13,6 +13,7 @@ from .change_plan import (
 )
 from .checkpoint import CheckpointError, assign_run_id, persist_checkpoint
 from .diagnosis import DiagnosisLLM, DiagnosisValidationError, validate_diagnosis_output
+from .git_boundary import GitBoundaryError, inspect_git_context
 from .harness_policy import check_change_plan_policy
 from .patch import (
     PatchGenerator,
@@ -999,10 +1000,23 @@ def diff_review(state: AgentState) -> AgentState:
     change_plan = state.get("change_plan", {})
     repair_attempts = state.get("repair_attempts", [])
     blocked_reason = _latest_blocked_reason(state)
+    repo_root = state.get("repo_context", {}).get("repo_root")
+    git_audit: list[dict[str, Any]] = []
+    git_context = None
+    git_limitation = None
+    if repo_root:
+        try:
+            git_context = inspect_git_context(repo_root, audit=git_audit)
+        except GitBoundaryError as exc:
+            git_limitation = f"Git context unavailable: {exc}"
 
     changed_files = patch.get("target_files", []) if patch else []
     tests_run = [result["command"] for result in state.get("test_results", [])]
     known_limitations = _review_known_limitations(state, latest_test_result, blocked_reason)
+    if git_context and git_context["dirty"]:
+        known_limitations.append("Dirty Git worktree detected; agent must not overwrite unrelated user changes.")
+    if git_limitation:
+        known_limitations.append(git_limitation)
     final_status = _review_final_status(state, latest_test_result, blocked_reason)
 
     review_status = {
@@ -1020,13 +1034,15 @@ def diff_review(state: AgentState) -> AgentState:
         "assumptions": diagnosis.get("assumptions", []),
         "known_limitations": known_limitations,
     }
+    if git_context:
+        review_status["git"] = git_context
     if latest_test_result:
         review_status["latest_test_result"] = latest_test_result
     if blocked_reason:
         review_status["stopped_reason"] = blocked_reason
 
     audit = append_structured_audit(
-        state,
+        {**state, "audit": [*state.get("audit", []), *git_audit]},
         {
             "event_type": "diff_review",
             "actor": "agent",
@@ -1052,7 +1068,11 @@ def diff_review(state: AgentState) -> AgentState:
         "review_status": review_status,
         "audit": audit,
     }
-    repo_root = state.get("repo_context", {}).get("repo_root")
+    if git_context:
+        output_state["repo_context"] = {
+            **state.get("repo_context", {}),
+            "git": git_context,
+        }
     if repo_root:
         try:
             checkpoint = persist_checkpoint(
