@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path, PurePath
 from typing import Any, Protocol
 
-from .harness_policy import check_patch_policy
+from .harness_policy import HarnessPolicyConfig, check_patch_policy
 from .state import ChangePlan, Diagnosis, Patch, PolicyResult, RepoContext, Task
 
 
@@ -37,6 +37,7 @@ def validate_candidate_patch(
     *,
     repo_context: RepoContext,
     change_plan: ChangePlan,
+    policy_config: HarnessPolicyConfig | None = None,
 ) -> tuple[Patch, PolicyResult]:
     if not isinstance(output, dict):
         raise PatchValidationError("patch output must be a dictionary")
@@ -53,6 +54,7 @@ def validate_candidate_patch(
         metadata["target_files"],
         changed_lines=metadata["changed_lines"],
         patch_size_bytes=metadata["size_bytes"],
+        config=policy_config,
         policy_path=Path(repo_context["repo_root"]) / "harness" / "policy.yaml",
     )
     if not policy_result["allowed"]:

@@ -15,7 +15,7 @@ from .checkpoint import CheckpointError, assign_run_id, persist_checkpoint
 from .diagnosis import DiagnosisLLM, DiagnosisValidationError, validate_diagnosis_output
 from .git_boundary import GitBoundaryError, inspect_git_context
 from .github_boundary import GitHubBoundaryError, prepare_github_draft
-from .harness_policy import check_change_plan_policy
+from .harness_policy import HarnessPolicyConfig, check_change_plan_policy
 from .observability import ObservabilityError, persist_observability, summarize_observability
 from .patch import (
     PatchGenerator,
@@ -276,7 +276,11 @@ def diagnose_task(state: AgentState, llm: DiagnosisLLM) -> AgentState:
     }
 
 
-def propose_change_plan(state: AgentState, planner: ChangePlanner) -> AgentState:
+def propose_change_plan(
+    state: AgentState,
+    planner: ChangePlanner,
+    policy_config: HarnessPolicyConfig | None = None,
+) -> AgentState:
     if "diagnosis" not in state:
         return _blocked_state(
             state,
@@ -298,6 +302,7 @@ def propose_change_plan(state: AgentState, planner: ChangePlanner) -> AgentState
 
     policy_result = check_change_plan_policy(
         change_plan,
+        config=policy_config,
         policy_path=Path(state["repo_context"]["repo_root"]) / "harness" / "policy.yaml",
     )
     audit = append_structured_audit(
@@ -415,7 +420,11 @@ def propose_change_plan(state: AgentState, planner: ChangePlanner) -> AgentState
     }
 
 
-def generate_patch(state: AgentState, patch_generator: PatchGenerator) -> AgentState:
+def generate_patch(
+    state: AgentState,
+    patch_generator: PatchGenerator,
+    policy_config: HarnessPolicyConfig | None = None,
+) -> AgentState:
     if "diagnosis" not in state:
         return _blocked_state(
             state,
@@ -472,6 +481,7 @@ def generate_patch(state: AgentState, patch_generator: PatchGenerator) -> AgentS
             raw_output,
             repo_context=state["repo_context"],
             change_plan=state["change_plan"],
+            policy_config=policy_config,
         )
     except PatchPolicyError as exc:
         audit.append(
@@ -666,6 +676,7 @@ def perform_repair_attempt(
     command: dict | None = None,
     timeout_seconds: float = 30,
     command_runner: TestCommandRunner | None = None,
+    policy_config: HarnessPolicyConfig | None = None,
 ) -> AgentState:
     prerequisite_error = _repair_prerequisite_error(state)
     if prerequisite_error:
@@ -734,6 +745,7 @@ def perform_repair_attempt(
 
     policy_result = check_change_plan_policy(
         repair_change_plan,
+        config=policy_config,
         policy_path=Path(state["repo_context"]["repo_root"]) / "harness" / "policy.yaml",
     )
     audit.append(
@@ -791,6 +803,7 @@ def perform_repair_attempt(
             raw_patch,
             repo_context=state["repo_context"],
             change_plan=repair_change_plan,
+            policy_config=policy_config,
         )
     except PatchPolicyError as exc:
         audit.append(
@@ -1337,14 +1350,19 @@ def build_coding_diagnosis_graph(llm: DiagnosisLLM):
     return builder.compile()
 
 
-def build_coding_change_plan_graph(llm: DiagnosisLLM, planner: ChangePlanner):
+def build_coding_change_plan_graph(
+    llm: DiagnosisLLM,
+    planner: ChangePlanner,
+    *,
+    policy_config: HarnessPolicyConfig | None = None,
+):
     builder = StateGraph(AgentState)
     builder.add_node("intake_task", intake_task)
     builder.add_node("inspect_repository", inspect_repository)
     builder.add_node("select_relevant_files", select_relevant_files)
     builder.add_node("summarize_project_context", summarize_project_context)
     builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
-    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner))
+    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner, policy_config))
     builder.add_node("blocked", blocked)
 
     builder.add_edge(START, "intake_task")
@@ -1380,15 +1398,21 @@ def build_coding_change_plan_graph(llm: DiagnosisLLM, planner: ChangePlanner):
     return builder.compile()
 
 
-def build_coding_patch_graph(llm: DiagnosisLLM, planner: ChangePlanner, patch_generator: PatchGenerator):
+def build_coding_patch_graph(
+    llm: DiagnosisLLM,
+    planner: ChangePlanner,
+    patch_generator: PatchGenerator,
+    *,
+    policy_config: HarnessPolicyConfig | None = None,
+):
     builder = StateGraph(AgentState)
     builder.add_node("intake_task", intake_task)
     builder.add_node("inspect_repository", inspect_repository)
     builder.add_node("select_relevant_files", select_relevant_files)
     builder.add_node("summarize_project_context", summarize_project_context)
     builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
-    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner))
-    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator))
+    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner, policy_config))
+    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator, policy_config))
     builder.add_node("blocked", blocked)
 
     builder.add_edge(START, "intake_task")
@@ -1439,6 +1463,7 @@ def build_coding_test_execution_graph(
     *,
     test_command: dict | None = None,
     timeout_seconds: float = 30,
+    policy_config: HarnessPolicyConfig | None = None,
 ):
     builder = StateGraph(AgentState)
     builder.add_node("intake_task", intake_task)
@@ -1446,8 +1471,8 @@ def build_coding_test_execution_graph(
     builder.add_node("select_relevant_files", select_relevant_files)
     builder.add_node("summarize_project_context", summarize_project_context)
     builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
-    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner))
-    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator))
+    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner, policy_config))
+    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator, policy_config))
     builder.add_node("run_tests", lambda state: run_tests(state, command=test_command, timeout_seconds=timeout_seconds))
     builder.add_node("blocked", blocked)
 
@@ -1510,6 +1535,7 @@ def build_coding_repair_graph(
     test_command: dict | None = None,
     timeout_seconds: float = 30,
     command_runner: TestCommandRunner | None = None,
+    policy_config: HarnessPolicyConfig | None = None,
 ):
     builder = StateGraph(AgentState)
     builder.add_node("intake_task", intake_task)
@@ -1517,8 +1543,8 @@ def build_coding_repair_graph(
     builder.add_node("select_relevant_files", select_relevant_files)
     builder.add_node("summarize_project_context", summarize_project_context)
     builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
-    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner))
-    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator))
+    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner, policy_config))
+    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator, policy_config))
     builder.add_node(
         "run_tests",
         lambda state: run_tests(
@@ -1617,6 +1643,7 @@ def build_coding_diff_review_graph(
     test_command: dict | None = None,
     timeout_seconds: float = 30,
     command_runner: TestCommandRunner | None = None,
+    policy_config: HarnessPolicyConfig | None = None,
 ):
     builder = StateGraph(AgentState)
     builder.add_node("intake_task", intake_task)
@@ -1624,8 +1651,8 @@ def build_coding_diff_review_graph(
     builder.add_node("select_relevant_files", select_relevant_files)
     builder.add_node("summarize_project_context", summarize_project_context)
     builder.add_node("diagnose_task", lambda state: diagnose_task(state, llm))
-    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner))
-    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator))
+    builder.add_node("propose_change_plan", lambda state: propose_change_plan(state, planner, policy_config))
+    builder.add_node("generate_patch", lambda state: generate_patch(state, patch_generator, policy_config))
     builder.add_node(
         "run_tests",
         lambda state: run_tests(

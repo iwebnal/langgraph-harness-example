@@ -41,6 +41,16 @@ python run_demo.py
 pytest
 ```
 
+## Coding task runner
+
+Первый CLI smoke-runner для coding-agent workflow можно запустить на стороннем локальном repository:
+
+```bash
+python run_coding_task.py --repo /path/to/repo --task "Update feature behavior"
+```
+
+Runner использует deterministic fake `DiagnosisLLM`, `ChangePlanner`, `PatchGenerator` и `RepairPlanner`. Он валидирует candidate patch через существующий coding workflow и печатает summary/audit, но не применяет patch, не выполняет Git/GitHub writes, не использует network, deploy или arbitrary shell. Если в целевом repo нет `harness/policy.yaml`, используется безопасный default `HarnessPolicyConfig` без записи policy-файла.
+
 Ожидаемое поведение:
 
 - low-risk notification changes создают release plan автоматически;

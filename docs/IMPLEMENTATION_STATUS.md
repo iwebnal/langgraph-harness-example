@@ -364,6 +364,8 @@ Phase 19 добавил production hardening package for the local MVP:
 - Phase 19 deterministic red-team eval runner added in `src/release_triage_agent/hardening.py`.
 - Red-team eval cases added in `harness/red_team_eval_cases.jsonl`.
 - Added focused production hardening tests in `tests/test_production_hardening.py`.
+- Added first CLI smoke runner in `run_coding_task.py` for invoking the existing coding workflow on a local repository with deterministic fake reasoning components and no patch application.
+- Added focused runner tests in `tests/test_run_coding_task.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -435,7 +437,7 @@ Phase 19 завершена. The local MVP now has a documented threat model, re
 
 ## Known Issues
 
-- MVP eval cases now cover release triage and coding workflow behavior, but there is no standalone CLI wrapper yet.
+- MVP eval cases cover release triage and coding workflow behavior, and a standalone deterministic CLI smoke runner exists; it is not a real LLM integration and does not apply patches.
 - Patch validation exists, but no controlled patch application step has been enabled yet.
 - Tool execution is registry-based and includes required pytest plus optional local-only lint/typecheck/dependency-check wrappers; no arbitrary shell or package install command is allowed.
 - Git boundaries are read-only only; no commit, checkout, branch creation, reset, clean, tag, push or merge capability exists.
@@ -520,6 +522,7 @@ Phase 19 завершена. The local MVP now has a documented threat model, re
 - Prompt-injection content from repository files and GitHub context must be preserved as untrusted data and must never be followed as instructions.
 - Red-team evals must remain local and deterministic; failing red-team cases block claims of production readiness.
 - Future adoption beyond local MVP requires a new explicit phase rather than extending Phase 19 silently.
+- `run_coding_task.py` is a smoke runner over the existing coding workflow. It uses fake deterministic diagnosis/planning/patch/repair components, a fake command runner, and safe default policy config when the target repository has no `harness/policy.yaml`; it does not write policy files or apply patches.
 
 ## Baseline Test Command
 
