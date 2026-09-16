@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 17 — Expanded tooling
+Current phase: Phase 18 — Observability
 
 Status: Completed
 
@@ -227,6 +227,18 @@ Phase 17 добавил deterministic expanded engineering tooling boundaries:
 - extends `harness/policy.yaml` only to formalize the deterministic tool allowlist and sandbox requirements;
 - preserves release triage behavior and keeps arbitrary shell, command strings, command chaining, unrestricted network, Git/GitHub writes and deployment triggers unavailable.
 
+Phase 18 добавил deterministic local observability boundaries:
+
+- defines typed observability records, metrics and report schemas in `AgentState`;
+- adds deterministic `trace_id` generation from the run id and correlation ids for audit-derived observability records;
+- adds local-only structured JSONL observability logs under repo-local `harness/audit/<run_id>/observability.jsonl`;
+- redacts sensitive keys and inline secret/token/password/API-key values before writing observability records;
+- derives metrics from local state and audit events for tool calls, denied tool calls, policy checks, policy violations, command executions, failed commands/tests, repair attempts, approval gates and checkpoint/audit writes;
+- adds a summary API for local run observability reports with `external_telemetry=false` and `network=off`;
+- integrates observability metadata into final diff review and checkpoint flow without hiding primary workflow failures;
+- extends `harness/policy.yaml` only to formalize the local observability write prefix, append-only contract and disabled external telemetry;
+- preserves Phase 12 durable audit boundaries, Phase 16 sandbox boundaries, Phase 17 tool allowlist and existing release triage behavior.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -247,7 +259,7 @@ Phase 17 добавил deterministic expanded engineering tooling boundaries:
 - [x] Phase 15 — GitHub boundaries
 - [x] Phase 16 — Sandbox execution
 - [x] Phase 17 — Expanded tooling
-- [ ] Phase 18 — Observability
+- [x] Phase 18 — Observability
 - [ ] Phase 19 — Production hardening
 
 ## Completed
@@ -331,6 +343,11 @@ Phase 17 добавил deterministic expanded engineering tooling boundaries:
 - Added optional local-only lint/typecheck/dependency-check wrappers for `python -m ruff check`, `python -m mypy` and `python -m pip check`; missing optional modules return controlled `skipped` results.
 - `harness/policy.yaml` now formalizes the tool allowlist, sandbox requirement, `off` network policy and denied tool tokens.
 - Added focused expanded tooling tests in `tests/test_tool_registry.py`.
+- Phase 18 local observability support added in `src/release_triage_agent/observability.py`.
+- Extended `AgentState` with observability record, metrics, report and metadata schemas.
+- Final diff review now produces local observability metadata and a review-level report when a repository root is available.
+- `harness/policy.yaml` now formalizes local observability writes under `harness/audit/`, append-only behavior and disabled external telemetry.
+- Added focused observability tests in `tests/test_observability.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -382,15 +399,19 @@ Baseline result before Phase 17: 155 passed.
 
 Final result after Phase 17: 168 passed.
 
+Baseline result before Phase 18: 168 passed.
+
+Final result after Phase 18: 180 passed.
+
 ## Current Work
 
-Phase 17 завершена. Engineering tools now run only through a deterministic capability registry plus Phase 16 sandbox validation, with structured tool results and audit while keeping arbitrary shell, networked commands, Git/GitHub writes and deployment triggers unavailable.
+Phase 18 завершена. Runs now have local structured observability with deterministic trace ids, append-only repo-local logs, redacted records and metrics derived from audit/state, without external telemetry, network access or production monitoring.
 
 ## Next Actions
 
-1. Начать Phase 18: Observability.
-2. Add structured logs, trace IDs and metrics for tool calls, failures, policy violations and repair attempts.
-3. Keep audit and new observability output consistent, redacted and local-only; do not introduce external logging, unrestricted network or production telemetry.
+1. Начать Phase 19: Production hardening.
+2. Add a documented threat model review, red-team eval plan, prompt-injection tests and operational runbook/checklist.
+3. Keep Phase 19 local and policy-first: do not add Git/GitHub writes, deployment, production access, external telemetry or unrestricted network.
 
 ## Known Issues
 
@@ -418,6 +439,8 @@ Phase 17 завершена. Engineering tools now run only through a determinis
 - Sandbox filesystem write restrictions are deterministically validated by the harness contract; no controlled apply or broad filesystem mutation capability is enabled.
 - Optional lint/typecheck/dependency-check wrappers depend on local Python modules; missing modules intentionally produce controlled `skipped` results.
 - The Phase 17 dependency wrapper is `python -m pip check` only; dependency install/update commands remain unavailable.
+- Observability is local-only and append-only JSONL under `harness/audit/<run_id>/`; there is no external logging backend, telemetry exporter, dashboard or production monitoring integration.
+- Observability metrics are derived from local audit/state records; if a caller bypasses normal workflow state/audit conventions, metrics can only reflect the records supplied.
 
 ## Decisions
 
@@ -467,6 +490,10 @@ Phase 17 завершена. Engineering tools now run only through a determinis
 - Each Phase 17 tool has an exact argv pattern. Command strings, shell metacharacters, chaining tokens and dangerous CLIs remain denied before sandbox/execution.
 - Optional tools may be skipped when their Python module is unavailable; this is a controlled tool result, not a workflow crash.
 - Expanded tooling keeps network policy `off` and does not add package installation, Git/GitHub writes, deployment triggers or arbitrary process execution.
+- Phase 18 treats `run_id` as the root correlation key and derives `trace_id` deterministically as `trace_<run-id-suffix>`.
+- Observability records are append-only local JSONL files under the existing durable audit run directory; they never overwrite `audit.jsonl`, state snapshots or source files.
+- Observability failures do not replace or hide the primary workflow result; they are surfaced as review limitations when encountered.
+- Phase 18 explicitly disables external telemetry and networked logging by contract (`external_telemetry=false`, `network=off`).
 
 ## Baseline Test Command
 

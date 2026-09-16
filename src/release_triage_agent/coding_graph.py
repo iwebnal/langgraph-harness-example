@@ -16,6 +16,7 @@ from .diagnosis import DiagnosisLLM, DiagnosisValidationError, validate_diagnosi
 from .git_boundary import GitBoundaryError, inspect_git_context
 from .github_boundary import GitHubBoundaryError, prepare_github_draft
 from .harness_policy import check_change_plan_policy
+from .observability import ObservabilityError, persist_observability, summarize_observability
 from .patch import (
     PatchGenerator,
     PatchPolicyError,
@@ -1058,6 +1059,10 @@ def diff_review(state: AgentState) -> AgentState:
         review_status["latest_tool_result"] = latest_tool_result
     if blocked_reason:
         review_status["stopped_reason"] = blocked_reason
+    review_status["observability"] = summarize_observability(
+        {**state, "run_id": run_id, "audit": state.get("audit", [])},
+        run_id=run_id,
+    )
 
     github_audit: list[dict[str, Any]] = []
     github_draft = None
@@ -1127,6 +1132,54 @@ def diff_review(state: AgentState) -> AgentState:
                 target="checkpoint",
             )
         output_state["checkpoint"] = checkpoint
+        checkpoint_audit = [
+            {
+                "event_type": "checkpoint_written",
+                "actor": "harness",
+                "message": "Durable checkpoint metadata recorded for observability.",
+                "target": checkpoint["snapshots_path"],
+                "decision": "allowed",
+                "reason": f"latest_sequence={checkpoint['latest_sequence']}",
+            },
+            {
+                "event_type": "audit_written",
+                "actor": "harness",
+                "message": "Durable audit metadata recorded for observability.",
+                "target": checkpoint["audit_path"],
+                "decision": "allowed",
+                "reason": "Audit records are append-only JSONL.",
+            },
+        ]
+        observability_state = {
+            **state,
+            **output_state,
+            "audit": [*output_state["audit"], *checkpoint_audit],
+        }
+        try:
+            observability = persist_observability(
+                observability_state,
+                repo_root=repo_root,
+                run_id=run_id,
+            )
+        except ObservabilityError as exc:
+            review_status["known_limitations"] = [
+                *review_status.get("known_limitations", []),
+                f"Observability unavailable: {exc}",
+            ]
+        else:
+            output_state["observability"] = observability
+            review_status["observability"] = {
+                "run_id": run_id,
+                "trace_id": observability["trace_id"],
+                "metrics": observability["metrics"],
+                "audit_event_count": len(observability_state["audit"]),
+                "audit_event_types": [
+                    event.get("event_type", "legacy_audit_event") if isinstance(event, dict) else "legacy_audit_event"
+                    for event in observability_state["audit"]
+                ],
+                "external_telemetry": False,
+                "network": "off",
+            }
 
     return output_state
 

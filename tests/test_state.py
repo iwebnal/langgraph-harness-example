@@ -22,6 +22,7 @@ def test_agent_state_includes_coding_agent_mvp_fields():
         "patch",
         "test_results",
         "tool_results",
+        "observability",
         "repair_attempts",
         "review_status",
         "approval_requests",
@@ -128,6 +129,26 @@ def test_coding_agent_state_shape_accepts_structured_mvp_data():
         "repair_attempts": [],
         "review_status": {
             "status": "not_started",
+            "observability": {
+                "run_id": "run_0000000000000000",
+                "trace_id": "trace_0000000000000000",
+                "metrics": {
+                    "tool_calls": 0,
+                    "denied_tool_calls": 0,
+                    "policy_checks": 0,
+                    "policy_violations": 0,
+                    "command_executions": 0,
+                    "failed_commands": 0,
+                    "repair_attempts": 0,
+                    "approval_gates": 0,
+                    "checkpoint_writes": 0,
+                    "audit_writes": 0,
+                },
+                "audit_event_count": 0,
+                "audit_event_types": [],
+                "external_telemetry": False,
+                "network": "off",
+            },
             "latest_tool_result": {
                 "tool_id": "test.pytest",
                 "argv": ["pytest"],
@@ -160,6 +181,26 @@ def test_coding_agent_state_shape_accepts_structured_mvp_data():
             "legacy release triage audit event",
             {"event_type": "task_received", "actor": "agent", "message": "Task stored."},
         ],
+        "observability": {
+            "run_id": "run_0000000000000000",
+            "trace_id": "trace_0000000000000000",
+            "observability_path": "/repo/harness/audit/run_0000000000000000/observability.jsonl",
+            "records_written": 1,
+            "external_telemetry": False,
+            "network": "off",
+            "metrics": {
+                "tool_calls": 0,
+                "denied_tool_calls": 0,
+                "policy_checks": 0,
+                "policy_violations": 0,
+                "command_executions": 0,
+                "failed_commands": 0,
+                "repair_attempts": 0,
+                "approval_gates": 0,
+                "checkpoint_writes": 0,
+                "audit_writes": 0,
+            },
+        },
     }
 
     assert state["change_plan"]["tests_to_run"] == ["pytest"]

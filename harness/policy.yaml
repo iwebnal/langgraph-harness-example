@@ -49,6 +49,10 @@ harness_policy:
       - kubectl
       - git
       - gh
+  observability:
+    write_prefix: harness/audit/
+    append_only: true
+    external_telemetry_allowed: false
 rules:
   - id: high-risk-needs-approval
     description: High-risk changes must not produce an execution plan unless approval is present.

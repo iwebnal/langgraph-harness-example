@@ -175,6 +175,53 @@ class ToolResult(TypedDict):
     sandbox: NotRequired[SandboxResult]
 
 
+class ObservabilityMetrics(TypedDict):
+    tool_calls: int
+    denied_tool_calls: int
+    policy_checks: int
+    policy_violations: int
+    command_executions: int
+    failed_commands: int
+    repair_attempts: int
+    approval_gates: int
+    checkpoint_writes: int
+    audit_writes: int
+
+
+class ObservabilityRecord(TypedDict):
+    record_type: Literal["observability"]
+    run_id: str
+    trace_id: str
+    correlation_id: str
+    sequence: int
+    source: Literal["audit", "metrics"]
+    event_type: str
+    level: Literal["info", "warning", "error"]
+    message: str
+    attributes: dict[str, object]
+
+
+class ObservabilityReport(TypedDict):
+    run_id: str
+    trace_id: str
+    metrics: ObservabilityMetrics
+    audit_event_count: int
+    audit_event_types: list[str]
+    external_telemetry: bool
+    network: Literal["off"]
+
+
+class ObservabilityMetadata(TypedDict):
+    run_id: str
+    trace_id: str
+    observability_path: str
+    records_written: int
+    latest_sequence: NotRequired[int]
+    external_telemetry: bool
+    network: Literal["off"]
+    metrics: ObservabilityMetrics
+
+
 class TestResult(TypedDict):
     command: str
     tool_id: NotRequired[str]
@@ -275,6 +322,7 @@ class ReviewSummary(TypedDict):
     tests_run: NotRequired[list[str]]
     latest_test_result: NotRequired[TestResult]
     latest_tool_result: NotRequired[ToolResult]
+    observability: NotRequired[ObservabilityReport]
     repair_attempts_used: NotRequired[int]
     git: NotRequired[GitContext]
     github_draft: NotRequired[GitHubDraft]
@@ -360,3 +408,4 @@ class AgentState(TypedDict):
     sandbox_session: NotRequired[SandboxSession]
     run_id: NotRequired[str]
     checkpoint: NotRequired[CheckpointMetadata]
+    observability: NotRequired[ObservabilityMetadata]

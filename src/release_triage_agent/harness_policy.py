@@ -38,6 +38,9 @@ class HarnessPolicyConfig:
     tool_sandbox_required: bool
     tool_network_policy: str
     denied_tool_tokens: tuple[str, ...]
+    observability_write_prefix: str
+    observability_append_only: bool
+    external_telemetry_allowed: bool
 
 
 DEFAULT_POLICY_CONFIG = HarnessPolicyConfig(
@@ -53,6 +56,9 @@ DEFAULT_POLICY_CONFIG = HarnessPolicyConfig(
     tool_sandbox_required=True,
     tool_network_policy="off",
     denied_tool_tokens=("rm", "sudo", "ssh", "curl", "wget", "docker", "kubectl", "git", "gh"),
+    observability_write_prefix="harness/audit/",
+    observability_append_only=True,
+    external_telemetry_allowed=False,
 )
 
 
@@ -302,6 +308,9 @@ def _policy_config_from_mapping(data: dict[str, Any]) -> HarnessPolicyConfig:
     tooling = harness_policy.get("tooling", {})
     if tooling and not isinstance(tooling, dict):
         raise PolicyConfigError("harness_policy.tooling must be a mapping")
+    observability = harness_policy.get("observability", {})
+    if observability and not isinstance(observability, dict):
+        raise PolicyConfigError("harness_policy.observability must be a mapping")
 
     return HarnessPolicyConfig(
         allowed_change_prefixes=_string_tuple(filesystem, "allowed_change_prefixes"),
@@ -324,6 +333,13 @@ def _policy_config_from_mapping(data: dict[str, Any]) -> HarnessPolicyConfig:
             "denied_tokens",
             DEFAULT_POLICY_CONFIG.denied_tool_tokens,
         ),
+        observability_write_prefix=_optional_string(
+            observability,
+            "write_prefix",
+            DEFAULT_POLICY_CONFIG.observability_write_prefix,
+        ),
+        observability_append_only=_optional_bool(observability, "append_only", True),
+        external_telemetry_allowed=_optional_bool(observability, "external_telemetry_allowed", False),
     )
 
 
