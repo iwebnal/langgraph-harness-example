@@ -31,6 +31,24 @@ harness_policy:
       - high
       - migration
       - production
+  tooling:
+    allowed_tool_ids:
+      - test.pytest
+      - lint.ruff.check
+      - typecheck.mypy
+      - dependency.pip.check
+    sandbox_required: true
+    network_policy: off
+    denied_tokens:
+      - rm
+      - sudo
+      - ssh
+      - curl
+      - wget
+      - docker
+      - kubectl
+      - git
+      - gh
 rules:
   - id: high-risk-needs-approval
     description: High-risk changes must not produce an execution plan unless approval is present.

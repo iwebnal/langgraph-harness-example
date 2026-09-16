@@ -34,7 +34,8 @@ ApprovalScope = Literal[
 ]
 ApprovalDecisionStatus = Literal["approved", "rejected", "pending", "expired"]
 SandboxNetworkPolicy = Literal["off", "restricted"]
-TestStatus = Literal["not_run", "passed", "failed", "error"]
+TestStatus = Literal["not_run", "passed", "failed", "error", "skipped", "denied"]
+ToolStatus = Literal["passed", "failed", "error", "skipped", "denied"]
 PatchStatus = Literal["proposed", "validated", "applied", "rejected"]
 AuditActor = Literal["user", "agent", "llm", "harness", "tool", "human"]
 
@@ -159,8 +160,24 @@ class SandboxResult(TypedDict):
     secrets_isolated: bool
 
 
+class ToolResult(TypedDict):
+    tool_id: str
+    argv: list[str]
+    cwd: str
+    allowed: bool
+    status: ToolStatus
+    reason: str
+    exit_code: NotRequired[int]
+    stdout_excerpt: NotRequired[str]
+    stderr_excerpt: NotRequired[str]
+    output_excerpt: NotRequired[str]
+    duration_seconds: float
+    sandbox: NotRequired[SandboxResult]
+
+
 class TestResult(TypedDict):
     command: str
+    tool_id: NotRequired[str]
     argv: NotRequired[list[str]]
     status: TestStatus
     exit_code: NotRequired[int]
@@ -171,6 +188,7 @@ class TestResult(TypedDict):
     stderr_excerpt: NotRequired[str]
     cwd: NotRequired[str]
     sandbox: NotRequired[SandboxResult]
+    tool_result: NotRequired[ToolResult]
 
 
 class GitContext(TypedDict):
@@ -256,6 +274,7 @@ class ReviewSummary(TypedDict):
     patch_metadata: NotRequired[dict[str, object]]
     tests_run: NotRequired[list[str]]
     latest_test_result: NotRequired[TestResult]
+    latest_tool_result: NotRequired[ToolResult]
     repair_attempts_used: NotRequired[int]
     git: NotRequired[GitContext]
     github_draft: NotRequired[GitHubDraft]
@@ -330,6 +349,7 @@ class AgentState(TypedDict):
     patch_policy_result: NotRequired[PolicyResult]
     patch: NotRequired[Patch]
     test_results: NotRequired[list[TestResult]]
+    tool_results: NotRequired[list[ToolResult]]
     repair_attempts: NotRequired[list[RepairAttempt]]
     review_status: NotRequired[ReviewSummary]
     approval_requests: NotRequired[list[ApprovalRequest]]

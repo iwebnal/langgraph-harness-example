@@ -640,9 +640,11 @@ def run_tests(
         }
     )
 
+    tool_result = _tool_result_from_test_result(test_result)
     return {
         "workflow_stage": "ready_for_human_review",
         "test_results": [*state.get("test_results", []), test_result],
+        "tool_results": [*state.get("tool_results", []), tool_result],
         "review_status": {
             "status": "ready_for_human_review",
             "diff_summary": state["patch"].get("summary", "Validated patch tested."),
@@ -650,6 +652,7 @@ def run_tests(
             "risks": state["change_plan"]["policy_risks"],
             "known_limitations": ["Repair loop is not implemented until Phase 9."],
             "sandbox": test_result.get("sandbox", {}),
+            "latest_tool_result": tool_result,
         },
         "audit": audit,
     }
@@ -968,6 +971,8 @@ def perform_repair_attempt(
     }
     repair_attempts = [*state.get("repair_attempts", []), repair_attempt]
     test_results = [*state.get("test_results", []), test_result]
+    tool_result = _tool_result_from_test_result(test_result)
+    tool_results = [*state.get("tool_results", []), tool_result]
     latest_failed = latest_test_failed_or_error(test_results)
 
     limitations = []
@@ -985,6 +990,7 @@ def perform_repair_attempt(
         "patch_policy_result": patch_policy_result,
         "patch": patch,
         "test_results": test_results,
+        "tool_results": tool_results,
         "repair_attempts": repair_attempts,
         "review_status": {
             "status": "ready_for_human_review",
@@ -993,6 +999,7 @@ def perform_repair_attempt(
             "risks": repair_change_plan["policy_risks"],
             "known_limitations": limitations,
             "sandbox": test_result.get("sandbox", {}),
+            "latest_tool_result": tool_result,
         },
         "audit": audit,
     }
@@ -1001,6 +1008,7 @@ def perform_repair_attempt(
 def diff_review(state: AgentState) -> AgentState:
     run_id = assign_run_id(state)
     latest_test_result = state.get("test_results", [])[-1] if state.get("test_results") else None
+    latest_tool_result = state.get("tool_results", [])[-1] if state.get("tool_results") else None
     patch = state.get("patch")
     diagnosis = state.get("diagnosis", {})
     change_plan = state.get("change_plan", {})
@@ -1046,6 +1054,8 @@ def diff_review(state: AgentState) -> AgentState:
         review_status["latest_test_result"] = latest_test_result
         if latest_test_result.get("sandbox"):
             review_status["sandbox"] = latest_test_result["sandbox"]
+    if latest_tool_result:
+        review_status["latest_tool_result"] = latest_tool_result
     if blocked_reason:
         review_status["stopped_reason"] = blocked_reason
 
@@ -1921,6 +1931,27 @@ def _run_validated_test_command(
         command_allowlist=[["pytest"], ["python", "-m", "pytest"]],
     )
     return test_result, sandbox_audit
+
+
+def _tool_result_from_test_result(test_result: dict[str, Any]) -> dict[str, Any]:
+    existing = test_result.get("tool_result")
+    if isinstance(existing, dict):
+        return existing
+    argv = test_result.get("argv", [])
+    return {
+        "tool_id": test_result.get("tool_id", "test.pytest"),
+        "argv": argv if isinstance(argv, list) else [],
+        "cwd": test_result.get("cwd", "."),
+        "allowed": test_result.get("status") != "denied",
+        "status": test_result.get("status", "error"),
+        "reason": test_result.get("summary", ""),
+        **({"exit_code": test_result["exit_code"]} if "exit_code" in test_result else {}),
+        "stdout_excerpt": test_result.get("stdout_excerpt", ""),
+        "stderr_excerpt": test_result.get("stderr_excerpt", ""),
+        "output_excerpt": test_result.get("output_excerpt", ""),
+        "duration_seconds": test_result.get("duration_seconds", 0),
+        **({"sandbox": test_result["sandbox"]} if "sandbox" in test_result else {}),
+    }
 
 
 def _patch_metadata(patch: dict | None) -> dict[str, object]:

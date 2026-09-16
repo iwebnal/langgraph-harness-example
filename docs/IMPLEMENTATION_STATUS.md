@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 16 — Sandbox execution
+Current phase: Phase 17 — Expanded tooling
 
 Status: Completed
 
@@ -213,6 +213,20 @@ Phase 16 добавил deterministic sandbox execution boundaries:
 - records `sandbox_policy_checked`, `sandbox_session_created` and `sandbox_request_denied` audit events;
 - preserves Phase 14 Git read-only boundaries, Phase 15 GitHub draft-only boundaries and adds no Git/GitHub/deployment write capability.
 
+Phase 17 добавил deterministic expanded engineering tooling boundaries:
+
+- defines a typed deterministic tool capability registry in `src/release_triage_agent/tool_registry.py`;
+- declares every allowed tool with stable id, exact argv patterns, cwd policy, timeout, output limit, sandbox requirement, network policy and write policy;
+- keeps `test.pytest` / `pytest` and `python -m pytest` as the required test tool while adding optional local-only wrappers for `lint.ruff.check`, `typecheck.mypy` and `dependency.pip.check`;
+- validates every tool request through the registry before sandbox creation and subprocess execution;
+- runs Phase 16 sandbox validation before execution and keeps network `off`, secrets isolated, Git/GitHub writes disabled and deployment unavailable;
+- returns structured tool results with tool id, argv, cwd, allowed/denied status, reason, exit code, stdout/stderr/output excerpts and duration;
+- treats unavailable optional tools as controlled `skipped` results instead of breaking the workflow;
+- stores tool results in `AgentState.tool_results` and `review_status.latest_tool_result` while preserving existing `test_results`;
+- records `tool_allowed`, `tool_denied`, `tool_started` and `tool_finished` audit events;
+- extends `harness/policy.yaml` only to formalize the deterministic tool allowlist and sandbox requirements;
+- preserves release triage behavior and keeps arbitrary shell, command strings, command chaining, unrestricted network, Git/GitHub writes and deployment triggers unavailable.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -232,7 +246,7 @@ Phase 16 добавил deterministic sandbox execution boundaries:
 - [x] Phase 14 — Git boundaries
 - [x] Phase 15 — GitHub boundaries
 - [x] Phase 16 — Sandbox execution
-- [ ] Phase 17 — Expanded tooling
+- [x] Phase 17 — Expanded tooling
 - [ ] Phase 18 — Observability
 - [ ] Phase 19 — Production hardening
 
@@ -311,6 +325,12 @@ Phase 16 добавил deterministic sandbox execution boundaries:
 - Extended `AgentState` with sandbox config/session/result schemas and sandbox metadata in `TestResult` / `ReviewSummary`.
 - Test command execution now creates sandbox sessions, uses repository-scoped cwd validation, records sandbox audit events and stores sandbox metadata without expanding allowed commands.
 - Added focused sandbox boundary tests in `tests/test_sandbox.py`.
+- Phase 17 deterministic tool capability registry added in `src/release_triage_agent/tool_registry.py`.
+- Extended `AgentState` with `ToolResult`, `tool_results`, `tool_id` on `TestResult` and `latest_tool_result` on `ReviewSummary`.
+- Existing Phase 8 pytest runner now delegates validation/execution to the deterministic registry while preserving `run_test_command` compatibility.
+- Added optional local-only lint/typecheck/dependency-check wrappers for `python -m ruff check`, `python -m mypy` and `python -m pip check`; missing optional modules return controlled `skipped` results.
+- `harness/policy.yaml` now formalizes the tool allowlist, sandbox requirement, `off` network policy and denied tool tokens.
+- Added focused expanded tooling tests in `tests/test_tool_registry.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -358,21 +378,25 @@ Baseline result before Phase 16: 142 passed.
 
 Final result after Phase 16: 155 passed.
 
+Baseline result before Phase 17: 155 passed.
+
+Final result after Phase 17: 168 passed.
+
 ## Current Work
 
-Phase 16 завершена. Test execution now runs through a deterministic local constrained sandbox boundary contract with repository-scoped cwd validation, restricted/off-by-default network metadata, secrets isolation rules, resource limits and audit.
+Phase 17 завершена. Engineering tools now run only through a deterministic capability registry plus Phase 16 sandbox validation, with structured tool results and audit while keeping arbitrary shell, networked commands, Git/GitHub writes and deployment triggers unavailable.
 
 ## Next Actions
 
-1. Начать Phase 17: Expanded tooling.
-2. Add any new tool boundary only through explicit deterministic allowlists and sandbox validation.
-3. Keep Git/GitHub writes, deployment triggers, unrestricted network and arbitrary shell unavailable unless a later phase explicitly designs and approves them.
+1. Начать Phase 18: Observability.
+2. Add structured logs, trace IDs and metrics for tool calls, failures, policy violations and repair attempts.
+3. Keep audit and new observability output consistent, redacted and local-only; do not introduce external logging, unrestricted network or production telemetry.
 
 ## Known Issues
 
 - MVP eval cases now cover release triage and coding workflow behavior, but there is no standalone CLI wrapper yet.
 - Patch validation exists, but no controlled patch application step has been enabled yet.
-- Command allowlist runner exists only for `pytest` and `python -m pytest`; no lint/typecheck/package commands are allowed yet.
+- Tool execution is registry-based and includes required pytest plus optional local-only lint/typecheck/dependency-check wrappers; no arbitrary shell or package install command is allowed.
 - Git boundaries are read-only only; no commit, checkout, branch creation, reset, clean, tag, push or merge capability exists.
 - GitHub boundaries are read/draft-only only; no API/network client, comment posting, PR creation/update/approval/merge, issue closing, label editing, workflow/deployment trigger, branch push or release/tag creation exists.
 - Structured diagnosis currently depends on deterministic heuristic relevant-file selection from Phase 3.
@@ -392,6 +416,8 @@ Phase 16 завершена. Test execution now runs through a deterministic loc
 - GitHub draft summaries are prepared-only artifacts and must be manually reviewed; they are never posted.
 - Sandbox execution is an MVP local constrained boundary/contract, not a Docker/Kubernetes/cloud isolation layer.
 - Sandbox filesystem write restrictions are deterministically validated by the harness contract; no controlled apply or broad filesystem mutation capability is enabled.
+- Optional lint/typecheck/dependency-check wrappers depend on local Python modules; missing modules intentionally produce controlled `skipped` results.
+- The Phase 17 dependency wrapper is `python -m pip check` only; dependency install/update commands remain unavailable.
 
 ## Decisions
 
@@ -437,6 +463,10 @@ Phase 16 завершена. Test execution now runs through a deterministic loc
 - Sandbox network defaults to `off`; `restricted` is represented as a contract value, while unrestricted network is denied.
 - Sandbox sessions are attached to already-allowlisted command execution only; they do not introduce new commands, arbitrary shell, Git writes, GitHub writes or deployment triggers.
 - Test subprocesses receive a minimal environment with repo-local `HOME` and no copied credential/secrets environment.
+- Phase 17 makes the deterministic tool registry the source of truth for engineering tool execution; `harness/policy.yaml` mirrors the tool ids and sandbox requirements as policy metadata.
+- Each Phase 17 tool has an exact argv pattern. Command strings, shell metacharacters, chaining tokens and dangerous CLIs remain denied before sandbox/execution.
+- Optional tools may be skipped when their Python module is unavailable; this is a controlled tool result, not a workflow crash.
+- Expanded tooling keeps network policy `off` and does not add package installation, Git/GitHub writes, deployment triggers or arbitrary process execution.
 
 ## Baseline Test Command
 

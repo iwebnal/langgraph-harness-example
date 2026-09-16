@@ -104,7 +104,9 @@ def test_command_execution_uses_sandbox_metadata_without_broadening_allowlist(tm
 
     assert result["status"] == "passed"
     assert result["sandbox"]["network"] == "off"
-    assert result["sandbox"]["command_allowlist"] == [["pytest"], ["python", "-m", "pytest"]]
+    assert ["pytest"] in result["sandbox"]["command_allowlist"]
+    assert ["python", "-m", "pytest"] in result["sandbox"]["command_allowlist"]
+    assert ["python", "-m", "ruff", "check"] in result["sandbox"]["command_allowlist"]
     with pytest.raises(CommandValidationError, match="not allowlisted"):
         validate_test_command({"argv": ["python3", "-m", "pytest"]})
 

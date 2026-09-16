@@ -21,6 +21,7 @@ def test_agent_state_includes_coding_agent_mvp_fields():
         "policy_result",
         "patch",
         "test_results",
+        "tool_results",
         "repair_attempts",
         "review_status",
         "approval_requests",
@@ -113,9 +114,29 @@ def test_coding_agent_state_shape_accepts_structured_mvp_data():
             "target_files": ["tests/test_policy.py"],
         },
         "test_results": [{"command": "pytest", "status": "not_run", "summary": "Not run yet."}],
+        "tool_results": [
+            {
+                "tool_id": "test.pytest",
+                "argv": ["pytest"],
+                "cwd": "/repo",
+                "allowed": True,
+                "status": "skipped",
+                "reason": "Not run yet.",
+                "duration_seconds": 0,
+            }
+        ],
         "repair_attempts": [],
         "review_status": {
             "status": "not_started",
+            "latest_tool_result": {
+                "tool_id": "test.pytest",
+                "argv": ["pytest"],
+                "cwd": "/repo",
+                "allowed": True,
+                "status": "skipped",
+                "reason": "Not run yet.",
+                "duration_seconds": 0,
+            },
             "git": {
                 "current_branch": "main",
                 "status_summary": "Git worktree clean.",

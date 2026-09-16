@@ -5,6 +5,7 @@ from pathlib import Path, PurePath
 from typing import Any, Iterable
 
 from .state import ChangePlan, PolicyResult, PolicyViolation
+from .tool_registry import DEFAULT_TOOL_REGISTRY
 
 
 DEFAULT_POLICY_PATH = Path("harness/policy.yaml")
@@ -33,6 +34,10 @@ class HarnessPolicyConfig:
     max_changed_files: int
     max_patch_lines: int
     max_patch_size_bytes: int
+    allowed_tool_ids: tuple[str, ...]
+    tool_sandbox_required: bool
+    tool_network_policy: str
+    denied_tool_tokens: tuple[str, ...]
 
 
 DEFAULT_POLICY_CONFIG = HarnessPolicyConfig(
@@ -44,6 +49,10 @@ DEFAULT_POLICY_CONFIG = HarnessPolicyConfig(
     max_changed_files=5,
     max_patch_lines=300,
     max_patch_size_bytes=100_000,
+    allowed_tool_ids=tuple(tool.stable_id for tool in DEFAULT_TOOL_REGISTRY.tools),
+    tool_sandbox_required=True,
+    tool_network_policy="off",
+    denied_tool_tokens=("rm", "sudo", "ssh", "curl", "wget", "docker", "kubectl", "git", "gh"),
 )
 
 
@@ -290,6 +299,9 @@ def _policy_config_from_mapping(data: dict[str, Any]) -> HarnessPolicyConfig:
     filesystem = _mapping(harness_policy, "filesystem")
     changes = _mapping(harness_policy, "changes")
     approvals = _mapping(harness_policy, "approvals")
+    tooling = harness_policy.get("tooling", {})
+    if tooling and not isinstance(tooling, dict):
+        raise PolicyConfigError("harness_policy.tooling must be a mapping")
 
     return HarnessPolicyConfig(
         allowed_change_prefixes=_string_tuple(filesystem, "allowed_change_prefixes"),
@@ -300,6 +312,18 @@ def _policy_config_from_mapping(data: dict[str, Any]) -> HarnessPolicyConfig:
         max_changed_files=_positive_int(changes, "max_changed_files"),
         max_patch_lines=_positive_int(changes, "max_patch_lines"),
         max_patch_size_bytes=_positive_int(changes, "max_patch_size_bytes"),
+        allowed_tool_ids=_optional_string_tuple(
+            tooling,
+            "allowed_tool_ids",
+            DEFAULT_POLICY_CONFIG.allowed_tool_ids,
+        ),
+        tool_sandbox_required=_optional_bool(tooling, "sandbox_required", True),
+        tool_network_policy=_optional_string(tooling, "network_policy", "off"),
+        denied_tool_tokens=_optional_string_tuple(
+            tooling,
+            "denied_tokens",
+            DEFAULT_POLICY_CONFIG.denied_tool_tokens,
+        ),
     )
 
 
@@ -321,6 +345,26 @@ def _positive_int(data: dict[str, Any], field: str) -> int:
     value = data.get(field)
     if not isinstance(value, int) or value <= 0:
         raise PolicyConfigError(f"{field} must be a positive integer")
+    return value
+
+
+def _optional_string_tuple(data: dict[str, Any], field: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    if field not in data:
+        return default
+    return _string_tuple(data, field)
+
+
+def _optional_string(data: dict[str, Any], field: str, default: str) -> str:
+    value = data.get(field, default)
+    if not isinstance(value, str) or not value:
+        raise PolicyConfigError(f"{field} must be a non-empty string")
+    return value
+
+
+def _optional_bool(data: dict[str, Any], field: str, default: bool) -> bool:
+    value = data.get(field, default)
+    if not isinstance(value, bool):
+        raise PolicyConfigError(f"{field} must be a boolean")
     return value
 
 
