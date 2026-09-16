@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Current phase: Phase 18 — Observability
+Current phase: Phase 19 — Production hardening
 
 Status: Completed
 
@@ -239,6 +239,18 @@ Phase 18 добавил deterministic local observability boundaries:
 - extends `harness/policy.yaml` only to formalize the local observability write prefix, append-only contract and disabled external telemetry;
 - preserves Phase 12 durable audit boundaries, Phase 16 sandbox boundaries, Phase 17 tool allowlist and existing release triage behavior.
 
+Phase 19 добавил production hardening package for the local MVP:
+
+- adds a documented threat model review in `docs/THREAT_MODEL.md`;
+- adds a red-team eval plan in `docs/RED_TEAM_EVAL_PLAN.md`;
+- adds a safe local operational runbook in `docs/OPERATIONAL_RUNBOOK.md`;
+- adds a release/hardening checklist in `docs/RELEASE_HARDENING_CHECKLIST.md`;
+- adds deterministic local red-team eval loading/running in `src/release_triage_agent/hardening.py`;
+- adds red-team cases in `harness/red_team_eval_cases.jsonl` for repository/GitHub prompt injection, protected files, arbitrary shell, secret exfiltration, policy weakening, Git/GitHub writes and deployment;
+- adds focused tests proving injected instructions are treated as data and unsafe actions remain blocked;
+- verifies audit and observability signals for blocked unsafe attempts;
+- preserves all existing MVP safety restrictions and does not add Git/GitHub writes, deployment, production access, external telemetry or unrestricted network.
+
 ## Phase Checklist
 
 - [x] Phase 0 — Baseline Assessment and project documentation
@@ -260,7 +272,7 @@ Phase 18 добавил deterministic local observability boundaries:
 - [x] Phase 16 — Sandbox execution
 - [x] Phase 17 — Expanded tooling
 - [x] Phase 18 — Observability
-- [ ] Phase 19 — Production hardening
+- [x] Phase 19 — Production hardening
 
 ## Completed
 
@@ -348,6 +360,10 @@ Phase 18 добавил deterministic local observability boundaries:
 - Final diff review now produces local observability metadata and a review-level report when a repository root is available.
 - `harness/policy.yaml` now formalizes local observability writes under `harness/audit/`, append-only behavior and disabled external telemetry.
 - Added focused observability tests in `tests/test_observability.py`.
+- Phase 19 threat model, red-team plan, operational runbook and release checklist added under `docs/`.
+- Phase 19 deterministic red-team eval runner added in `src/release_triage_agent/hardening.py`.
+- Red-team eval cases added in `harness/red_team_eval_cases.jsonl`.
+- Added focused production hardening tests in `tests/test_production_hardening.py`.
 - Existing release triage workflow remains unchanged and covered by tests.
 - Baseline and final test command verified with local venv:
 
@@ -403,15 +419,19 @@ Baseline result before Phase 18: 168 passed.
 
 Final result after Phase 18: 180 passed.
 
+Baseline result before Phase 19: 180 passed.
+
+Final result after Phase 19: 191 passed.
+
 ## Current Work
 
-Phase 18 завершена. Runs now have local structured observability with deterministic trace ids, append-only repo-local logs, redacted records and metrics derived from audit/state, without external telemetry, network access or production monitoring.
+Phase 19 завершена. The local MVP now has a documented threat model, red-team eval plan, deterministic local prompt-injection/unsafe-action evals, operational runbook and release hardening checklist while preserving all existing safety boundaries.
 
 ## Next Actions
 
-1. Начать Phase 19: Production hardening.
-2. Add a documented threat model review, red-team eval plan, prompt-injection tests and operational runbook/checklist.
-3. Keep Phase 19 local and policy-first: do not add Git/GitHub writes, deployment, production access, external telemetry or unrestricted network.
+1. Treat the roadmap MVP as complete for local controlled demonstration.
+2. Before any real-world adoption, perform a separate security review using `docs/THREAT_MODEL.md`, `docs/RED_TEAM_EVAL_PLAN.md`, `docs/OPERATIONAL_RUNBOOK.md` and `docs/RELEASE_HARDENING_CHECKLIST.md`.
+3. Any future real LLM, GitHub connector, controlled apply, deployment, production access, external telemetry or unrestricted network work must be a new explicitly scoped phase with new approvals and tests.
 
 ## Known Issues
 
@@ -441,6 +461,8 @@ Phase 18 завершена. Runs now have local structured observability with d
 - The Phase 17 dependency wrapper is `python -m pip check` only; dependency install/update commands remain unavailable.
 - Observability is local-only and append-only JSONL under `harness/audit/<run_id>/`; there is no external logging backend, telemetry exporter, dashboard or production monitoring integration.
 - Observability metrics are derived from local audit/state records; if a caller bypasses normal workflow state/audit conventions, metrics can only reflect the records supplied.
+- Phase 19 hardening is documentation plus deterministic local tests/evals; it is not a production deployment authorization.
+- Red-team evals cover representative unsafe behaviors but do not replace a full independent security review before real-world use.
 
 ## Decisions
 
@@ -494,6 +516,10 @@ Phase 18 завершена. Runs now have local structured observability with d
 - Observability records are append-only local JSONL files under the existing durable audit run directory; they never overwrite `audit.jsonl`, state snapshots or source files.
 - Observability failures do not replace or hide the primary workflow result; they are surfaced as review limitations when encountered.
 - Phase 18 explicitly disables external telemetry and networked logging by contract (`external_telemetry=false`, `network=off`).
+- Phase 19 completes the local controlled MVP safety review package without expanding runtime capabilities.
+- Prompt-injection content from repository files and GitHub context must be preserved as untrusted data and must never be followed as instructions.
+- Red-team evals must remain local and deterministic; failing red-team cases block claims of production readiness.
+- Future adoption beyond local MVP requires a new explicit phase rather than extending Phase 19 silently.
 
 ## Baseline Test Command
 
